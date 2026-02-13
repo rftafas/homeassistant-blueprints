@@ -1,16 +1,22 @@
 blueprint:
-  name: N-Way Interrupts
-  description: Sets multiple switches to control a light entity.
+  name: Timed Light
+  description: Sets a day and night timer to automatically turn off a light.
   domain: automation
   input:
     day_time_on:
       name: Day time active duration.
       selector:
-        time:
+        number:
+          min: 0
+          unit_of_measurement: seconds
+          mode: slider
     night_time_on:
       name: Night time active duration.
       selector:
-        time:
+        number:
+          min: 0
+          unit_of_measurement: seconds
+          mode: slider
     light_target:
       name: Light
       selector:
@@ -25,24 +31,15 @@ triggers:
     to: "on"
 conditions: []
 actions:
-  - variables:
-      day_time: !input day_time_on
-      day_hours: "{{ night_time.split(':')[0] | int }}"
-      day_minutes: "{{ night_time.split(':')[1] | int }}"
-      day_seconds: "{{ night_time.split(':')[2] | int }}"
-      night_time: !input night_time_on
-      night_hours: "{{ night_time.split(':')[0] | int }}"
-      night_minutes: "{{ night_time.split(':')[1] | int }}"
-      night_seconds: "{{ night_time.split(':')[2] | int }}"
   - if:
       - condition: sun
         before: sunset
         after: sunrise
     then:
       - delay:
-          hours: day_hours
-          minutes: day_minutes
-          seconds: day_seconds
+          hours: 0
+          minutes: 0
+          seconds: !input day_time_on
           milliseconds: 0
       - action: light.turn_off
         metadata: {}
@@ -51,9 +48,9 @@ actions:
         data: {}
     else:
       - delay:
-          hours: night_hours
-          minutes: night_minutes
-          seconds: night_seconds
+          hours: 0
+          minutes: 0
+          seconds: !input night_time_on
           milliseconds: 0
       - action: light.turn_off
         metadata: {}
