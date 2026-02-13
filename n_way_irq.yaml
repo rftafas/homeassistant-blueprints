@@ -1,0 +1,38 @@
+blueprint:
+  name: N-Way Interrupts
+  description: Sets multiple switches to control a light entity.
+  domain: automation
+  input:
+    trigger_entities:
+      name: Switches
+      selector:
+        entity:
+          domain: switch
+          multiple: true
+    light_target:
+      name: Light
+      selector:
+        entity:
+          domain: light
+
+mode: restart
+
+triggers:
+  - trigger: state
+    entity_id: !input trigger_entities
+    from:
+      - "on"
+    to:
+      - "off"
+  - trigger: state
+    entity_id: !input trigger_entities
+    from:
+      - "off"
+    to:
+      - "on"
+
+
+action:
+  - service: light.toggle
+    target:
+      entity_id: !input light_target

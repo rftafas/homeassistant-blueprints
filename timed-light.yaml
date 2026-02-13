@@ -1,0 +1,63 @@
+blueprint:
+  name: N-Way Interrupts
+  description: Sets multiple switches to control a light entity.
+  domain: automation
+  input:
+    day_time_on:
+      name: Day time active duration.
+      selector:
+        time:
+    night_time_on:
+      name: Night time active duration.
+      selector:
+        time:
+    light_target:
+      name: Light
+      selector:
+        entity:
+          domain: light
+
+
+triggers:
+  - trigger: state
+    entity_id: !input light_target
+    from: "off"
+    to: "on"
+conditions: []
+actions:
+  - variables:
+      day_time: !input day_time_on
+      day_hours: "{{ night_time.split(':')[0] | int }}"
+      day_minutes: "{{ night_time.split(':')[1] | int }}"
+      day_seconds: "{{ night_time.split(':')[2] | int }}"
+      night_time: !input night_time_on
+      night_hours: "{{ night_time.split(':')[0] | int }}"
+      night_minutes: "{{ night_time.split(':')[1] | int }}"
+      night_seconds: "{{ night_time.split(':')[2] | int }}"
+  - if:
+      - condition: sun
+        before: sunset
+        after: sunrise
+    then:
+      - delay:
+          hours: day_hours
+          minutes: day_minutes
+          seconds: day_seconds
+          milliseconds: 0
+      - action: light.turn_off
+        metadata: {}
+        target:
+          entity_id: !input light_target
+        data: {}
+    else:
+      - delay:
+          hours: night_hours
+          minutes: night_minutes
+          seconds: night_seconds
+          milliseconds: 0
+      - action: light.turn_off
+        metadata: {}
+        target:
+          entity_id: !input light_target
+        data: {}
+mode: restart

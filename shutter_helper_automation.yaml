@@ -1,0 +1,184 @@
+blueprint:
+  name: Virtual Shutter Engine
+  description: "Virtual Shutter for RF Blinders\n Generic shutter logic with timing, position tracking, and MQTT payload inputs.\n
+    Please, create the following helpers:\n
+    - input_number.<shutter_name>, with the range 0 to 100 for tracking position.\n
+    - input_select.<shutter_name>, with the options 'closed', 'closing', 'open', 'opening' and 'off'.\n
+    - cover.<shutter_name>, helper > template > cover\n"
+  
+  domain: automation
+
+  input:
+
+    time_up:
+      name: Time Up (seconds)
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: seconds
+          mode: slider
+
+    time_down:
+      name: Time Down (seconds)
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: seconds
+          mode: slider
+
+    position_helper:
+      name: Position Helper (input_number)
+      selector:
+        entity:
+          domain: input_number
+
+    status_select:
+      name: Status Select (input_select)
+      selector:
+        entity:
+          domain: input_select
+
+    mqtt_topic:
+      name: MQTT Topic
+      description: Topic to publish RF codes to
+      selector:
+        text:
+
+    payload_open:
+      name: MQTT Payload - OPEN
+      description: Raw RF code for opening
+      selector:
+        text:
+
+    payload_close:
+      name: MQTT Payload - CLOSE
+      description: Raw RF code for closing
+      selector:
+        text:
+
+    payload_stop:
+      name: MQTT Payload - STOP
+      description: Raw RF code for stop/disable
+      selector:
+        text:
+
+mode: restart
+
+trigger:
+  - platform: state
+    entity_id: !input status_select
+
+condition: []
+
+action:
+  - variables:
+      local_time_up: !input time_up
+      local_time_down: !input time_down
+      position: !input position_helper
+
+  - choose:
+      # ───────────────────────────────────────────────
+      # OPENING
+      # ───────────────────────────────────────────────
+      - conditions:
+          - condition: state
+            entity_id: !input status_select
+            state: opening
+        sequence:
+
+          - service: mqtt.publish
+            data:
+              topic: !input mqtt_topic
+              payload: !input payload_open
+              qos: 0
+              retain: false
+
+          - repeat:
+              while:
+                - condition: numeric_state
+                  entity_id: !input position_helper
+                  below: 100
+              sequence:
+                - service: input_number.set_value
+                  target:
+                    entity_id: !input position_helper
+                  data:
+                    value: >
+                      {% set position_float = states(position) | float %}
+                      {% set step_up = 100 / ( local_time_up | float * 2 ) %}
+                      {% set limit_up = 100 - step_up %}
+                      {% if position_float >= limit_up %}
+                        100
+                      {% else %}
+                        {% set position_float = position_float + step_up %}
+                        {{ position_float }}
+                      {% endif %}
+                - delay:
+                    milliseconds: 500
+
+          - service: input_select.select_option
+            target:
+              entity_id: !input status_select
+            data:
+              option: open
+
+      # ───────────────────────────────────────────────
+      # CLOSING
+      # ───────────────────────────────────────────────
+      - conditions:
+          - condition: state
+            entity_id: !input status_select
+            state: closing
+        sequence:
+
+          - service: mqtt.publish
+            data:
+              topic: !input mqtt_topic
+              payload: !input payload_close
+              qos: 0
+              retain: false
+
+          - repeat:
+              while:
+                - condition: numeric_state
+                  entity_id: !input position_helper
+                  above: 0
+              sequence:
+                - service: input_number.set_value
+                  target:
+                    entity_id: !input position_helper
+                  data:
+                    value: >
+                      {% set position_float = states(position) | float %}
+                      {% set step_down = 100 / ( local_time_down | float * 2 ) %}
+                      {% set limit_down = step_down %}
+                      {% if position_float <= limit_down %}
+                        0
+                      {% else %}
+                        {% set position_float = position_float - step_down %}
+                        {{ position_float }}
+                      {% endif %}
+
+                - delay:
+                    milliseconds: 500
+
+          - service: input_select.select_option
+            target:
+              entity_id: !input status_select
+            data:
+              option: closed
+
+    # ───────────────────────────────────────────────
+    # OFF (STOP)
+    # ───────────────────────────────────────────────
+    default:
+      - service: mqtt.publish
+        data:
+          topic: !input mqtt_topic
+          payload: !input payload_stop
+          qos: 0
+          retain: false
+              
+              
