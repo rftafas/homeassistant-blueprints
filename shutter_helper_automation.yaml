@@ -14,7 +14,7 @@ blueprint:
       name: Time Up (seconds)
       selector:
         number:
-          min: 0
+          min: 1
           max: 100
           unit_of_measurement: seconds
           mode: slider
@@ -23,7 +23,7 @@ blueprint:
       name: Time Down (seconds)
       selector:
         number:
-          min: 0
+          min: 1
           max: 100
           unit_of_measurement: seconds
           mode: slider
@@ -74,8 +74,12 @@ condition: []
 
 action:
   - variables:
-      local_time_up: !input time_up
-      local_time_down: !input time_down
+      local_time_up: >
+        {% set t = ( !input time_up | int ) %}
+        {{ 1 if t < 1 else t }}
+      local_time_down: >
+        {% set t = ( !input time_down | int ) %}
+        {{ 1 if t < 1 else t }}
       position: !input position_helper
 
   - choose:

@@ -7,14 +7,14 @@ blueprint:
       name: Day time active duration.
       selector:
         number:
-          min: 0
+          min: 10
           unit_of_measurement: seconds
           mode: slider
     night_time_on:
       name: Night time active duration.
       selector:
         number:
-          min: 0
+          min: 10
           unit_of_measurement: seconds
           mode: slider
     light_target:
@@ -32,9 +32,9 @@ triggers:
 conditions: []
 actions:
   - if:
-      - condition: sun
-        before: sunset
-        after: sunrise
+      - condition: state
+        entity_id: sun.sun
+        state: 'above_horizon'
     then:
       - delay:
           hours: 0
