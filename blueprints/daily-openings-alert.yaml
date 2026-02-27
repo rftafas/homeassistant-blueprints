@@ -1,0 +1,148 @@
+blueprint:
+  name: Daily openings check
+  description: >
+    Runs once per day at the time you choose. It checks every door, window, cover,
+    lock, or other entity you include in the list. If anything is still open (or a
+    lock is unlocked), you get one notification per selected phone listing those items.
+    If everything is closed (and locks locked), no notification is sent.
+
+    Note — binary sensors should use on = open for doors/windows/contacts;
+    covers count as open when state is open or opening; locks count as open when unlocked.
+
+  domain: automation
+  author: rftafas
+  homeassistant:
+    min_version: "2026.1.0"
+
+  input:
+    main_config:
+      name: Main configuration
+      description: Notifications and entities to check
+      collapsed: false
+      input:
+        notify_targets:
+          name: Phones to notify
+          description: >
+            Companion app notify entities (notify.mobile_app_*). You can pick several
+            phones; each receives the same message when something is open.
+          selector:
+            entity:
+              multiple: true
+              filter:
+                domain: notify
+                integration: mobile_app
+
+        opening_entities:
+          name: Openings to monitor
+          description: >
+            Windows, doors, gates (covers), locks, and similar entities. Anything that
+            should not be left open at check time.
+          selector:
+            entity:
+              multiple: true
+
+    schedule_config:
+      name: Schedule
+      description: When to run the daily check
+      collapsed: true
+      input:
+        notification_time:
+          name: Time of daily check
+          description: Local time when the automation runs each day.
+          default: "22:00:00"
+          selector:
+            time:
+
+    armed_config:
+      name: Optional armed gate
+      description: >
+        If enabled, the automation only runs when the selected helper is on (for example
+        a "daily check armed" input_boolean). Turn off to always run at the scheduled time.
+      collapsed: true
+      input:
+        enable_armed_gate:
+          name: Only run when armed helper is on
+          description: Disable to skip this requirement.
+          default: false
+          selector:
+            boolean:
+
+        require_armed_boolean:
+          name: Armed helper (input_boolean)
+          description: Required when "Only run when armed helper is on" is enabled.
+          selector:
+            entity:
+              domain: input_boolean
+
+mode: single
+max_exceeded: silent
+
+variables:
+  opening_entities: !input opening_entities
+  enable_armed_gate: !input enable_armed_gate
+  armed_boolean: !input require_armed_boolean
+  open_report: |
+    {% set ents = opening_entities %}
+    {% set openings = [ents] if ents is string else ents %}
+    {% set ns = namespace(lines=[]) %}
+    {% for e in openings %}
+      {% set domain = e.split(".")[0] %}
+      {% set st = states(e) %}
+      {% set is_open = false %}
+      {% if domain == "lock" %}
+        {% set is_open = st == "unlocked" %}
+      {% elif domain == "cover" %}
+        {% set is_open = st == "open" or st == "opening" %}
+      {% else %}
+        {% set is_open = st == "on" %}
+      {% endif %}
+      {% if is_open %}
+        {% set label = state_attr(e, "friendly_name") | default(e) %}
+        {% set ns.lines = ns.lines + ["- " ~ label ~ " (" ~ e ~ ")"] %}
+      {% endif %}
+    {% endfor %}
+    {%- for line in ns.lines %}
+    {{ line }}{%- if not loop.last %}
+
+    {% endif %}
+    {%- endfor %}
+  open_count: |
+    {% set ents = opening_entities %}
+    {% set openings = [ents] if ents is string else ents %}
+    {% set ns = namespace(c=0) %}
+    {% for e in openings %}
+      {% set domain = e.split(".")[0] %}
+      {% set st = states(e) %}
+      {% set is_open = false %}
+      {% if domain == "lock" %}
+        {% set is_open = st == "unlocked" %}
+      {% elif domain == "cover" %}
+        {% set is_open = st == "open" or st == "opening" %}
+      {% else %}
+        {% set is_open = st == "on" %}
+      {% endif %}
+      {% if is_open %}
+        {% set ns.c = ns.c + 1 %}
+      {% endif %}
+    {% endfor %}
+    {{ ns.c }}
+
+trigger:
+  - trigger: time
+    at: !input notification_time
+
+condition:
+  - condition: template
+    value_template: "{% if enable_armed_gate | bool %}{{ is_state(armed_boolean, \"on\") }}{% else %}true{% endif %}"
+
+action:
+  - if:
+      - condition: template
+        value_template: "{{ open_count | trim | int > 0 }}"
+    then:
+      - service: notify.send_message
+        target:
+          entity_id: !input notify_targets
+        data:
+          title: Daily openings check
+          message: "These are still open:\n\n{{ open_report }}"

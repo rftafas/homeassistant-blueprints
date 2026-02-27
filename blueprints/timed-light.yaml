@@ -1,0 +1,72 @@
+blueprint:
+  name: Timed Light
+  description: Sets a day and night timer to automatically turn off a light.
+  domain: automation
+  author: rftafas
+  homeassistant:
+    min_version: "2024.6.0"
+
+  input:
+    main_config:
+      name: Main Configuration
+      description: Core configuration
+      collapsed: false
+      input:
+        light_target:
+          name: Light
+          description: Light entity to control
+          selector:
+            entity:
+              domain: light
+    threshold_config:
+      name: Timing Thresholds
+      description: Configure day and night timers
+      collapsed: true
+      input:
+        day_time_on:
+          name: Day Time Duration
+          description: Time in seconds to keep light on during daytime
+          default: 300
+          selector:
+            number:
+              min: 10
+              unit_of_measurement: seconds
+              mode: slider
+        night_time_on:
+          name: Night Time Duration
+          description: Time in seconds to keep light on during nighttime
+          default: 600
+          selector:
+            number:
+              min: 10
+              unit_of_measurement: seconds
+              mode: slider
+
+mode: restart
+max_exceeded: silent
+
+trigger:
+  - platform: state
+    entity_id: !input light_target
+    from: "off"
+    to: "on"
+
+condition: []
+
+action:
+  - if:
+      - condition: state
+        entity_id: sun.sun
+        state: 'above_horizon'
+    then:
+      - delay:
+          seconds: !input day_time_on
+      - service: light.turn_off
+        target:
+          entity_id: !input light_target
+    else:
+      - delay:
+          seconds: !input night_time_on
+      - service: light.turn_off
+        target:
+          entity_id: !input light_target

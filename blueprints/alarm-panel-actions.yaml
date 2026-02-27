@@ -1,0 +1,152 @@
+blueprint:
+  name: Alarm Panel Actions
+  description: >
+    Run a separate user-defined action sequence for each state of an
+    alarm_control_panel (disarmed, arming, pending, armed_home, armed_away,
+    armed_night, armed_vacation, armed_custom_bypass, triggered).
+  domain: automation
+  author: rftafas
+  homeassistant:
+    min_version: "2024.6.0"
+
+  input:
+    main_config:
+      name: Main configuration
+      collapsed: false
+      input:
+        alarm_panel:
+          name: Alarm panel
+          selector:
+            entity:
+              domain: alarm_control_panel
+
+    actions_config:
+      name: Per-state actions
+      description: Leave empty to do nothing for that state.
+      collapsed: false
+      input:
+        on_disarmed:
+          name: On disarmed
+          default: []
+          selector:
+            action: {}
+        on_arming:
+          name: On arming
+          default: []
+          selector:
+            action: {}
+        on_pending:
+          name: On pending
+          default: []
+          selector:
+            action: {}
+        on_armed_home:
+          name: On armed home
+          default: []
+          selector:
+            action: {}
+        on_armed_away:
+          name: On armed away
+          default: []
+          selector:
+            action: {}
+        on_armed_night:
+          name: On armed night
+          default: []
+          selector:
+            action: {}
+        on_armed_vacation:
+          name: On armed vacation
+          default: []
+          selector:
+            action: {}
+        on_armed_custom_bypass:
+          name: On armed custom bypass
+          default: []
+          selector:
+            action: {}
+        on_triggered:
+          name: On triggered
+          default: []
+          selector:
+            action: {}
+
+mode: queued
+max_exceeded: silent
+
+trigger:
+  - platform: state
+    entity_id: !input alarm_panel
+    to: disarmed
+    id: disarmed
+  - platform: state
+    entity_id: !input alarm_panel
+    to: arming
+    id: arming
+  - platform: state
+    entity_id: !input alarm_panel
+    to: pending
+    id: pending
+  - platform: state
+    entity_id: !input alarm_panel
+    to: armed_home
+    id: armed_home
+  - platform: state
+    entity_id: !input alarm_panel
+    to: armed_away
+    id: armed_away
+  - platform: state
+    entity_id: !input alarm_panel
+    to: armed_night
+    id: armed_night
+  - platform: state
+    entity_id: !input alarm_panel
+    to: armed_vacation
+    id: armed_vacation
+  - platform: state
+    entity_id: !input alarm_panel
+    to: armed_custom_bypass
+    id: armed_custom_bypass
+  - platform: state
+    entity_id: !input alarm_panel
+    to: triggered
+    id: triggered
+
+action:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'disarmed' }}"
+        sequence: !input on_disarmed
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'arming' }}"
+        sequence: !input on_arming
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'pending' }}"
+        sequence: !input on_pending
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'armed_home' }}"
+        sequence: !input on_armed_home
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'armed_away' }}"
+        sequence: !input on_armed_away
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'armed_night' }}"
+        sequence: !input on_armed_night
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'armed_vacation' }}"
+        sequence: !input on_armed_vacation
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'armed_custom_bypass' }}"
+        sequence: !input on_armed_custom_bypass
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'triggered' }}"
+        sequence: !input on_triggered
