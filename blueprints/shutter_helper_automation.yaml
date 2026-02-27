@@ -7,79 +7,96 @@ blueprint:
     - cover.<shutter_name>, helper > template > cover\n"
   
   domain: automation
+  author: rftafas
+  homeassistant:
+    min_version: "2024.6.0"
 
   input:
+    main_config:
+      name: Main Configuration
+      description: Core configuration entities
+      collapsed: false
+      input:
+        position_helper:
+          name: Position Helper (input_number)
+          description: Input number helper for tracking shutter position
+          selector:
+            entity:
+              domain: input_number
 
-    time_up:
-      name: Time Up (seconds)
-      selector:
-        number:
-          min: 1
-          max: 100
-          unit_of_measurement: seconds
-          mode: slider
+        status_select:
+          name: Status Select (input_select)
+          description: Input select helper for shutter state
+          selector:
+            entity:
+              domain: input_select
 
-    time_down:
-      name: Time Down (seconds)
-      selector:
-        number:
-          min: 1
-          max: 100
-          unit_of_measurement: seconds
-          mode: slider
+    threshold_config:
+      name: Timing and MQTT
+      description: Time settings and MQTT payload configuration
+      collapsed: true
+      input:
+        time_up:
+          name: Time Up (seconds)
+          description: Time in seconds for shutter to fully open
+          default: 30
+          selector:
+            number:
+              min: 1
+              max: 100
+              unit_of_measurement: seconds
+              mode: slider
 
-    position_helper:
-      name: Position Helper (input_number)
-      selector:
-        entity:
-          domain: input_number
+        time_down:
+          name: Time Down (seconds)
+          description: Time in seconds for shutter to fully close
+          default: 30
+          selector:
+            number:
+              min: 1
+              max: 100
+              unit_of_measurement: seconds
+              mode: slider
 
-    status_select:
-      name: Status Select (input_select)
-      selector:
-        entity:
-          domain: input_select
+        mqtt_topic:
+          name: MQTT Topic
+          description: Topic to publish RF codes to
+          default: "zigbee2mqtt/bridge/request/device/configure"
+          selector:
+            text:
 
-    mqtt_topic:
-      name: MQTT Topic
-      description: Topic to publish RF codes to
-      selector:
-        text:
+        payload_open:
+          name: MQTT Payload - OPEN
+          description: Raw RF code for opening
+          default: ""
+          selector:
+            text:
 
-    payload_open:
-      name: MQTT Payload - OPEN
-      description: Raw RF code for opening
-      selector:
-        text:
+        payload_close:
+          name: MQTT Payload - CLOSE
+          description: Raw RF code for closing
+          default: ""
+          selector:
+            text:
 
-    payload_close:
-      name: MQTT Payload - CLOSE
-      description: Raw RF code for closing
-      selector:
-        text:
-
-    payload_stop:
-      name: MQTT Payload - STOP
-      description: Raw RF code for stop/disable
-      selector:
-        text:
+        payload_stop:
+          name: MQTT Payload - STOP
+          description: Raw RF code for stop/disable
+          default: ""
+          selector:
+            text:
 
 mode: restart
-
-trigger:
-  - platform: state
-    entity_id: !input status_select
+max_exceeded: silent
 
 condition: []
 
 action:
   - variables:
-      local_time_up: >
-        {% set t = ( !input time_up | int ) %}
-        {{ 1 if t < 1 else t }}
-      local_time_down: >
-        {% set t = ( !input time_down | int ) %}
-        {{ 1 if t < 1 else t }}
+      time_up_seconds: !input time_up
+      time_down_seconds: !input time_down
+      local_time_up: "{{ [ time_up_seconds | int(0), 1 ] | max }}"
+      local_time_down: "{{ [ time_down_seconds | int(0), 1 ] | max }}"
       position: !input position_helper
 
   - choose:

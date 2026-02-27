@@ -1,0 +1,9 @@
+{
+  "yaml.customTags": [
+    "!input",
+    "!input scalar",
+    "!input sequence"
+  ],
+  "yaml.schemaStore.enable": false,
+  "yaml.validate": false
+}
