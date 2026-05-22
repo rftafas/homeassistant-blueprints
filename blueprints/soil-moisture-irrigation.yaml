@@ -1,0 +1,216 @@
+blueprint:
+  name: Soil Moisture Irrigation
+  description: >
+    Scheduled irrigation based on calibrated soil moisture readings.
+
+    Add one or more soil humidity sensors, each with an immersion calibration reference:
+    the raw sensor reading (%) when the electrodes are fully submerged in water.
+    Each reading is corrected with `raw × 100 / reference`, then averaged.
+
+    At each scheduled time, irrigation runs only when the average corrected moisture is
+    at or below the threshold (soil is dry enough). Valves and pumps are optional —
+    at least one must be configured. When both are present, valves open first, then
+    pumps start after a short delay. Everything turns off after the configured duration.
+
+    Assumptions:
+    - One irrigation zone; all selected valves and pumps act together.
+    - Schedule uses local time; the automation runs at each configured time trigger.
+    - Sensors report numeric moisture in percent.
+
+  domain: automation
+  author: rftafas
+  homeassistant:
+    min_version: "2024.6.0"
+
+  input:
+    main_config:
+      name: Main Configuration
+      description: Sensors, valves, and pumps
+      collapsed: false
+      input:
+        soil_sensors:
+          name: Soil humidity sensors
+          description: >
+            Add one entry per sensor. Set the immersion calibration reference by
+            submerging the electrodes in water and entering the raw reading shown.
+          default: []
+          selector:
+            object:
+              label_field: sensor
+              description_field: immersion_reference
+              multiple: true
+              fields:
+                sensor:
+                  label: Sensor
+                  required: true
+                  selector:
+                    entity:
+                      filter:
+                        - domain: sensor
+                          device_class: moisture
+                immersion_reference:
+                  label: Immersion calibration reference
+                  description: Raw sensor reading (%) when fully submerged in water.
+                  required: true
+                  selector:
+                    number:
+                      min: 1
+                      max: 100
+                      unit_of_measurement: "%"
+                      mode: box
+
+        valve_entities:
+          name: Valves
+          description: >
+            Optional irrigation valves (switch or valve entities). Leave empty if not used.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain:
+                    - switch
+                    - valve
+
+        pump_entities:
+          name: Pumps
+          description: >
+            Optional irrigation pumps (switch entities). Leave empty if not used.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                domain: switch
+
+    threshold_config:
+      name: Thresholds and Timing
+      description: Moisture threshold and irrigation timing
+      collapsed: true
+      input:
+        humidity_threshold:
+          name: Humidity threshold
+          description: >
+            Irrigate when the average corrected moisture is at or below this value (%).
+            If the average is above the threshold, irrigation is skipped.
+          default: 40
+          selector:
+            number:
+              min: 0
+              max: 100
+              unit_of_measurement: "%"
+              mode: slider
+
+        irrigation_duration:
+          name: Irrigation duration
+          description: How long valves and pumps stay on before shutting down.
+          default:
+            hours: 0
+            minutes: 10
+            seconds: 0
+          selector:
+            duration: {}
+
+        pump_delay:
+          name: Pump start delay
+          description: Wait time after opening valves before starting pumps.
+          default:
+            hours: 0
+            minutes: 0
+            seconds: 2
+          selector:
+            duration: {}
+
+    schedule_config:
+      name: Schedule
+      description: Daily activation times
+      collapsed: true
+      input:
+        activation_triggers:
+          name: Activation times
+          description: >
+            Add one or more time triggers. Irrigation is evaluated at each scheduled time.
+          default:
+            - trigger: time
+              at: "06:00:00"
+          selector:
+            trigger: {}
+
+mode: single
+max_exceeded: silent
+
+variables:
+  soil_sensors: !input soil_sensors
+  humidity_threshold: !input humidity_threshold
+  valve_entities: !input valve_entities
+  pump_entities: !input pump_entities
+  avg_corrected_moisture: |
+    {% set ns = namespace(values=[]) %}
+    {% for item in soil_sensors %}
+      {% set raw = states(item.sensor) | float(none) %}
+      {% set ref = item.immersion_reference | float(0) %}
+      {% if raw is not none and ref > 0 %}
+        {% set ns.values = ns.values + [raw * 100 / ref] %}
+      {% endif %}
+    {% endfor %}
+    {{ (ns.values | sum / ns.values | length) | round(2) if ns.values else '' }}
+  has_actuators: |
+    {% set valves = valve_entities %}
+    {% set pumps = pump_entities %}
+    {% set valve_list = [valves] if valves is string else (valves or []) %}
+    {% set pump_list = [pumps] if pumps is string else (pumps or []) %}
+    {{ valve_list | length > 0 or pump_list | length > 0 }}
+  valve_list: |
+    {% set valves = valve_entities %}
+    {{ [valves] if valves is string else (valves or []) }}
+  pump_list: |
+    {% set pumps = pump_entities %}
+    {{ [pumps] if pumps is string else (pumps or []) }}
+
+trigger:
+  - triggers: !input activation_triggers
+
+condition:
+  - condition: template
+    value_template: "{{ has_actuators | bool }}"
+  - condition: template
+    value_template: "{{ avg_corrected_moisture != '' }}"
+  - condition: template
+    value_template: "{{ avg_corrected_moisture | float <= humidity_threshold | float }}"
+
+action:
+  - if:
+      - condition: template
+        value_template: "{{ valve_list | length > 0 }}"
+    then:
+      - action: homeassistant.turn_on
+        target:
+          entity_id: "{{ valve_list }}"
+
+  - delay: !input pump_delay
+
+  - if:
+      - condition: template
+        value_template: "{{ pump_list | length > 0 }}"
+    then:
+      - action: homeassistant.turn_on
+        target:
+          entity_id: "{{ pump_list }}"
+
+  - delay: !input irrigation_duration
+
+  - if:
+      - condition: template
+        value_template: "{{ pump_list | length > 0 }}"
+    then:
+      - action: homeassistant.turn_off
+        target:
+          entity_id: "{{ pump_list }}"
+
+  - if:
+      - condition: template
+        value_template: "{{ valve_list | length > 0 }}"
+    then:
+      - action: homeassistant.turn_off
+        target:
+          entity_id: "{{ valve_list }}"
