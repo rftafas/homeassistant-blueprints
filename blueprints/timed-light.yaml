@@ -30,8 +30,8 @@ blueprint:
           selector:
             number:
               min: 10
+              max: 3600
               unit_of_measurement: seconds
-              mode: slider
         night_time_on:
           name: Night Time Duration
           description: Time in seconds to keep light on during nighttime
@@ -39,8 +39,8 @@ blueprint:
           selector:
             number:
               min: 10
+              max: 3600
               unit_of_measurement: seconds
-              mode: slider
 
 mode: restart
 max_exceeded: silent

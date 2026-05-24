@@ -3,9 +3,10 @@ blueprint:
   description: >
     Scheduled irrigation based on calibrated soil moisture readings.
 
-    Add one or more soil humidity sensors, each with an immersion calibration reference:
-    the raw sensor reading (%) when the electrodes are fully submerged in water.
-    Each reading is corrected with `raw × 100 / reference`, then averaged.
+    Add up to five soil humidity sensors. For each one, select the sensor and set
+    its immersion calibration reference: the raw reading (%) when electrodes are
+    fully submerged in water. Each reading is corrected with `raw × 100 / reference`,
+    then averaged. Leave unused sensor slots empty.
 
     At each scheduled time, irrigation runs only when the average corrected moisture is
     at or below the threshold (soil is dry enough). Valves and pumps are optional —
@@ -28,36 +29,100 @@ blueprint:
       description: Sensors, valves, and pumps
       collapsed: false
       input:
-        soil_sensors:
-          name: Soil humidity sensors
-          description: >
-            Add one entry per sensor. Set the immersion calibration reference by
-            submerging the electrodes in water and entering the raw reading shown.
-          default: []
+        moisture_sensor_1:
+          name: Soil sensor 1
+          description: Leave unselected if unused.
           selector:
-            object:
-              label_field: sensor
-              description_field: immersion_reference
-              multiple: true
-              fields:
-                sensor:
-                  label: Sensor
-                  required: true
-                  selector:
-                    entity:
-                      filter:
-                        - domain: sensor
-                          device_class: moisture
-                immersion_reference:
-                  label: Immersion calibration reference
-                  description: Raw sensor reading (%) when fully submerged in water.
-                  required: true
-                  selector:
-                    number:
-                      min: 1
-                      max: 100
-                      unit_of_measurement: "%"
-                      mode: box
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: moisture
+
+        immersion_reference_1:
+          name: Sensor 1 immersion reference
+          description: Raw % reading when sensor 1 is fully submerged in water.
+          default: 100
+          selector:
+            number:
+              min: 1
+              max: 100
+              unit_of_measurement: "%"
+
+        moisture_sensor_2:
+          name: Soil sensor 2
+          description: Leave unselected if unused.
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: moisture
+
+        immersion_reference_2:
+          name: Sensor 2 immersion reference
+          description: Raw % reading when sensor 2 is fully submerged in water.
+          default: 100
+          selector:
+            number:
+              min: 1
+              max: 100
+              unit_of_measurement: "%"
+
+        moisture_sensor_3:
+          name: Soil sensor 3
+          description: Leave unselected if unused.
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: moisture
+
+        immersion_reference_3:
+          name: Sensor 3 immersion reference
+          description: Raw % reading when sensor 3 is fully submerged in water.
+          default: 100
+          selector:
+            number:
+              min: 1
+              max: 100
+              unit_of_measurement: "%"
+
+        moisture_sensor_4:
+          name: Soil sensor 4
+          description: Leave unselected if unused.
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: moisture
+
+        immersion_reference_4:
+          name: Sensor 4 immersion reference
+          description: Raw % reading when sensor 4 is fully submerged in water.
+          default: 100
+          selector:
+            number:
+              min: 1
+              max: 100
+              unit_of_measurement: "%"
+
+        moisture_sensor_5:
+          name: Soil sensor 5
+          description: Leave unselected if unused.
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: moisture
+
+        immersion_reference_5:
+          name: Sensor 5 immersion reference
+          description: Raw % reading when sensor 5 is fully submerged in water.
+          default: 100
+          selector:
+            number:
+              min: 1
+              max: 100
+              unit_of_measurement: "%"
 
         valve_entities:
           name: Valves
@@ -93,7 +158,7 @@ blueprint:
           description: >
             Irrigate when the average corrected moisture is at or below this value (%).
             If the average is above the threshold, irrigation is skipped.
-          default: 40
+          default: 25
           selector:
             number:
               min: 0
@@ -140,17 +205,35 @@ mode: single
 max_exceeded: silent
 
 variables:
-  soil_sensors: !input soil_sensors
+  moisture_sensor_1: !input moisture_sensor_1
+  moisture_sensor_2: !input moisture_sensor_2
+  moisture_sensor_3: !input moisture_sensor_3
+  moisture_sensor_4: !input moisture_sensor_4
+  moisture_sensor_5: !input moisture_sensor_5
+  immersion_reference_1: !input immersion_reference_1
+  immersion_reference_2: !input immersion_reference_2
+  immersion_reference_3: !input immersion_reference_3
+  immersion_reference_4: !input immersion_reference_4
+  immersion_reference_5: !input immersion_reference_5
   humidity_threshold: !input humidity_threshold
   valve_entities: !input valve_entities
   pump_entities: !input pump_entities
   avg_corrected_moisture: |
     {% set ns = namespace(values=[]) %}
-    {% for item in soil_sensors %}
-      {% set raw = states(item.sensor) | float(none) %}
-      {% set ref = item.immersion_reference | float(0) %}
-      {% if raw is not none and ref > 0 %}
-        {% set ns.values = ns.values + [raw * 100 / ref] %}
+    {% set pairs = [
+      (moisture_sensor_1, immersion_reference_1),
+      (moisture_sensor_2, immersion_reference_2),
+      (moisture_sensor_3, immersion_reference_3),
+      (moisture_sensor_4, immersion_reference_4),
+      (moisture_sensor_5, immersion_reference_5),
+    ] %}
+    {% for sensor, ref in pairs %}
+      {% if sensor %}
+        {% set raw = states(sensor) | float(none) %}
+        {% set calibration = ref | float(0) %}
+        {% if raw is not none and calibration > 0 %}
+          {% set ns.values = ns.values + [raw * 100 / calibration] %}
+        {% endif %}
       {% endif %}
     {% endfor %}
     {{ (ns.values | sum / ns.values | length) | round(2) if ns.values else '' }}
@@ -160,57 +243,62 @@ variables:
     {% set valve_list = [valves] if valves is string else (valves or []) %}
     {% set pump_list = [pumps] if pumps is string else (pumps or []) %}
     {{ valve_list | length > 0 or pump_list | length > 0 }}
-  valve_list: |
-    {% set valves = valve_entities %}
-    {{ [valves] if valves is string else (valves or []) }}
-  pump_list: |
-    {% set pumps = pump_entities %}
-    {{ [pumps] if pumps is string else (pumps or []) }}
 
 trigger:
   - triggers: !input activation_triggers
 
 condition:
   - condition: template
-    value_template: "{{ has_actuators | bool }}"
+    value_template: >
+      {{ has_actuators | bool }}
   - condition: template
-    value_template: "{{ avg_corrected_moisture != '' }}"
+    value_template: >
+      {{ avg_corrected_moisture != '' }}
   - condition: template
-    value_template: "{{ avg_corrected_moisture | float <= humidity_threshold | float }}"
+    value_template: >
+      {{ avg_corrected_moisture | float <= humidity_threshold | float }}
 
 action:
   - if:
       - condition: template
-        value_template: "{{ valve_list | length > 0 }}"
+        value_template: >
+          {% set v = valve_entities %}
+          {{ ([v] if v is string else (v or [])) | length > 0 }}
     then:
       - action: homeassistant.turn_on
         target:
-          entity_id: "{{ valve_list }}"
+          entity_id: !input valve_entities
 
   - delay: !input pump_delay
 
   - if:
       - condition: template
-        value_template: "{{ pump_list | length > 0 }}"
+        value_template: >
+          {% set p = pump_entities %}
+          {{ ([p] if p is string else (p or [])) | length > 0 }}
     then:
       - action: homeassistant.turn_on
         target:
-          entity_id: "{{ pump_list }}"
+          entity_id: !input pump_entities
 
   - delay: !input irrigation_duration
 
   - if:
       - condition: template
-        value_template: "{{ pump_list | length > 0 }}"
+        value_template: >
+          {% set p = pump_entities %}
+          {{ ([p] if p is string else (p or [])) | length > 0 }}
     then:
       - action: homeassistant.turn_off
         target:
-          entity_id: "{{ pump_list }}"
+          entity_id: !input pump_entities
 
   - if:
       - condition: template
-        value_template: "{{ valve_list | length > 0 }}"
+        value_template: >
+          {% set v = valve_entities %}
+          {{ ([v] if v is string else (v or [])) | length > 0 }}
     then:
       - action: homeassistant.turn_off
         target:
-          entity_id: "{{ valve_list }}"
+          entity_id: !input valve_entities

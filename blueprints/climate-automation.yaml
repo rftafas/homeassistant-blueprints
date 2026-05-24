@@ -216,9 +216,6 @@ trigger:
   - trigger: state
     entity_id:
       - !input external_temp_sensor
-  - trigger: state
-    entity_id:
-      - !input temp_set_point
 
 condition:
   - condition: not
@@ -269,7 +266,7 @@ action:
                       entity_id: !input hvac_entity
                     data:
                       hvac_mode: cool
-                      temperature: "{{ internal_setpoint }}"
+                      temperature: !input temp_set_point
                   - service: climate.set_fan_mode
                     data:
                       fan_mode: high
@@ -287,7 +284,7 @@ action:
                       entity_id: !input hvac_entity
                     data:
                       hvac_mode: cool
-                      temperature: "{{ internal_setpoint }}"
+                      temperature: !input temp_set_point
                   - service: climate.set_fan_mode
                     data:
                       fan_mode: medium
@@ -305,7 +302,7 @@ action:
                       entity_id: !input hvac_entity
                     data:
                       hvac_mode: cool
-                      temperature: "{{ internal_setpoint }}"
+                      temperature: !input temp_set_point
                   - service: climate.set_fan_mode
                     data:
                       fan_mode: low
@@ -323,7 +320,7 @@ action:
                       entity_id: !input hvac_entity
                     data:
                       hvac_mode: auto
-                      temperature: "{{ internal_setpoint }}"
+                      temperature: !input temp_set_point
                   - service: climate.set_fan_mode
                     data:
                       fan_mode: low
@@ -353,7 +350,7 @@ action:
                               entity_id: !input hvac_entity
                             data:
                               hvac_mode: auto
-                              temperature: "{{ internal_setpoint }}"
+                              temperature: !input temp_set_point
       - conditions:
           - condition: state
             entity_id: !input nighttime_auto_climate_enable
@@ -389,7 +386,7 @@ action:
                       entity_id: !input hvac_entity
                     data:
                       hvac_mode: auto
-                      temperature: "{{ internal_setpoint }}"
+                      temperature: !input temp_set_point
                   - service: climate.set_fan_mode
                     data:
                       fan_mode: low
@@ -407,7 +404,7 @@ action:
                       entity_id: !input hvac_entity
                     data:
                       hvac_mode: auto
-                      temperature: "{{ internal_setpoint }}"
+                      temperature: !input temp_set_point
                   - service: climate.set_fan_mode
                     data:
                       fan_mode: high
@@ -425,7 +422,7 @@ action:
                       entity_id: !input hvac_entity
                     data:
                       hvac_mode: auto
-                      temperature: "{{ internal_setpoint }}"
+                      temperature: !input temp_set_point
                   - service: climate.set_fan_mode
                     data:
                       fan_mode: medium
@@ -443,7 +440,7 @@ action:
                       entity_id: !input hvac_entity
                     data:
                       hvac_mode: auto
-                      temperature: "{{ internal_setpoint }}"
+                      temperature: !input temp_set_point
                   - service: climate.set_fan_mode
                     data:
                       fan_mode: low
@@ -454,14 +451,13 @@ action:
             entity_id: !input occupation_sensor
             state: "off"
         sequence:
-          - variables:
-              upper: "{{ internal_setpoint + 4 }}"
-              lower: "{{ internal_setpoint - 4 }}"
           - choose:
               - conditions:
                   - condition: template
                     value_template: >
                       {% set ext = states(external_temperature) | float(avg_internal_temp | float) %}
+                      {% set upper = internal_setpoint | float + 4 %}
+                      {% set lower = internal_setpoint | float - 4 %}
                       {{ ext > upper or ext < lower }}
                 sequence:
                   - action: climate.set_temperature
@@ -471,6 +467,8 @@ action:
                     data:
                       hvac_mode: auto
                       temperature: >
+                        {% set upper = internal_setpoint | float + 4 %}
+                        {% set lower = internal_setpoint | float - 4 %}
                         {% if avg_internal_temp > upper %}
                           {{ upper }}
                         {% elif avg_internal_temp < lower %}
