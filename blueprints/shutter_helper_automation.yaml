@@ -89,16 +89,18 @@ blueprint:
 mode: restart
 max_exceeded: silent
 
+variables:
+  position: !input position_helper
+  time_up_seconds: !input time_up
+  time_down_seconds: !input time_down
+
+trigger:
+  - trigger: state
+    entity_id: !input status_select
+
 condition: []
 
 action:
-  - variables:
-      time_up_seconds: !input time_up
-      time_down_seconds: !input time_down
-      local_time_up: "{{ [ time_up_seconds | int(0), 1 ] | max }}"
-      local_time_down: "{{ [ time_down_seconds | int(0), 1 ] | max }}"
-      position: !input position_helper
-
   - choose:
       # ───────────────────────────────────────────────
       # OPENING
@@ -128,7 +130,8 @@ action:
                   data:
                     value: >
                       {% set position_float = states(position) | float %}
-                      {% set step_up = 100 / ( local_time_up | float * 2 ) %}
+                      {% set local_time_up = [time_up_seconds | int(0), 1] | max %}
+                      {% set step_up = 100 / (local_time_up * 2) %}
                       {% set limit_up = 100 - step_up %}
                       {% if position_float >= limit_up %}
                         100
@@ -173,7 +176,8 @@ action:
                   data:
                     value: >
                       {% set position_float = states(position) | float %}
-                      {% set step_down = 100 / ( local_time_down | float * 2 ) %}
+                      {% set local_time_down = [time_down_seconds | int(0), 1] | max %}
+                      {% set step_down = 100 / (local_time_down * 2) %}
                       {% set limit_down = step_down %}
                       {% if position_float <= limit_down %}
                         0

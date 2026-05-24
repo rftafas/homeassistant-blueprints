@@ -138,7 +138,8 @@ condition:
 action:
   - if:
       - condition: template
-        value_template: "{{ open_count | trim | int > 0 }}"
+        value_template: >
+          {{ open_count | trim | int > 0 }}
     then:
       - service: notify.send_message
         target:
