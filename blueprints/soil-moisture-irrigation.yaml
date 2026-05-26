@@ -1,22 +1,19 @@
 blueprint:
   name: Soil Moisture Irrigation
   description: >
-    Scheduled irrigation based on calibrated soil moisture readings.
+    Once-daily irrigation with an optional manual trigger. At the configured
+    time each day the automation evaluates soil and weather gates in sequence;
+    if every gate passes it irrigates. When the optional manual trigger turns
+    ON, irrigation runs immediately and skips all gates.
 
-    Add up to five soil humidity sensors. For each one, select the sensor and set
-    its immersion calibration reference: the raw reading (%) when electrodes are
-    fully submerged in water. Each reading is corrected with `raw × 100 / reference`,
-    then averaged. Leave unused sensor slots empty.
-
-    At each scheduled time, irrigation runs only when the average corrected moisture is
-    at or below the threshold (soil is dry enough). Valves and pumps are optional —
-    at least one must be configured. When both are present, valves open first, then
-    pumps start after a short delay. Everything turns off after the configured duration.
+    Soil signal: pick exactly one check (moisture, accumulated rain in mm,
+    accumulated rain duration, or an every-X-days fallback). Weather gates skip
+    scheduled runs if it is raining now or if any checked forecast day is rainy.
+    An optional wind gate waits for calmer conditions before irrigating.
 
     Assumptions:
     - One irrigation zone; all selected valves and pumps act together.
-    - Schedule uses local time; the automation runs at each configured time trigger.
-    - Sensors report numeric moisture in percent.
+    - One evaluation per trigger event.
 
   domain: automation
   author: rftafas
@@ -24,147 +21,29 @@ blueprint:
     min_version: "2024.6.0"
 
   input:
-    main_config:
-      name: Main Configuration
-      description: Sensors, valves, and pumps
-      collapsed: false
-      input:
-        moisture_sensor_1:
-          name: Soil sensor 1
-          description: Leave unselected if unused.
-          selector:
-            entity:
-              filter:
-                - domain: sensor
-                  device_class: moisture
-
-        immersion_reference_1:
-          name: Sensor 1 immersion reference
-          description: Raw % reading when sensor 1 is fully submerged in water.
-          default: 100
-          selector:
-            number:
-              min: 1
-              max: 100
-              unit_of_measurement: "%"
-
-        moisture_sensor_2:
-          name: Soil sensor 2
-          description: Leave unselected if unused.
-          selector:
-            entity:
-              filter:
-                - domain: sensor
-                  device_class: moisture
-
-        immersion_reference_2:
-          name: Sensor 2 immersion reference
-          description: Raw % reading when sensor 2 is fully submerged in water.
-          default: 100
-          selector:
-            number:
-              min: 1
-              max: 100
-              unit_of_measurement: "%"
-
-        moisture_sensor_3:
-          name: Soil sensor 3
-          description: Leave unselected if unused.
-          selector:
-            entity:
-              filter:
-                - domain: sensor
-                  device_class: moisture
-
-        immersion_reference_3:
-          name: Sensor 3 immersion reference
-          description: Raw % reading when sensor 3 is fully submerged in water.
-          default: 100
-          selector:
-            number:
-              min: 1
-              max: 100
-              unit_of_measurement: "%"
-
-        moisture_sensor_4:
-          name: Soil sensor 4
-          description: Leave unselected if unused.
-          selector:
-            entity:
-              filter:
-                - domain: sensor
-                  device_class: moisture
-
-        immersion_reference_4:
-          name: Sensor 4 immersion reference
-          description: Raw % reading when sensor 4 is fully submerged in water.
-          default: 100
-          selector:
-            number:
-              min: 1
-              max: 100
-              unit_of_measurement: "%"
-
-        moisture_sensor_5:
-          name: Soil sensor 5
-          description: Leave unselected if unused.
-          selector:
-            entity:
-              filter:
-                - domain: sensor
-                  device_class: moisture
-
-        immersion_reference_5:
-          name: Sensor 5 immersion reference
-          description: Raw % reading when sensor 5 is fully submerged in water.
-          default: 100
-          selector:
-            number:
-              min: 1
-              max: 100
-              unit_of_measurement: "%"
-
-        valve_entities:
-          name: Valves
-          description: >
-            Optional irrigation valves (switch or valve entities). Leave empty if not used.
-          default: []
-          selector:
-            entity:
-              multiple: true
-              filter:
-                - domain:
-                    - switch
-                    - valve
-
-        pump_entities:
-          name: Pumps
-          description: >
-            Optional irrigation pumps (switch entities). Leave empty if not used.
-          default: []
-          selector:
-            entity:
-              multiple: true
-              filter:
-                domain: switch
-
-    threshold_config:
-      name: Thresholds and Timing
-      description: Moisture threshold and irrigation timing
+    irrigation_trigger_execution:
+      name: Trigger and execution
+      description: When irrigation runs and how it completes.
       collapsed: true
       input:
-        humidity_threshold:
-          name: Humidity threshold
-          description: >
-            Irrigate when the average corrected moisture is at or below this value (%).
-            If the average is above the threshold, irrigation is skipped.
-          default: 25
+        activation_time:
+          name: Schedule
+          description: Local time when irrigation is evaluated once per day.
+          default: "06:00:00"
           selector:
-            number:
-              min: 0
-              max: 100
-              unit_of_measurement: "%"
-              mode: slider
+            time: {}
+
+        manual_trigger_entity:
+          name: Manual trigger (optional)
+          description: >
+            Optional binary_sensor or input_boolean. Turning it ON runs
+            irrigation immediately, skipping all checks. Leave empty to disable.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: binary_sensor
+                - domain: input_boolean
 
         irrigation_duration:
           name: Irrigation duration
@@ -176,129 +55,348 @@ blueprint:
           selector:
             duration: {}
 
-        pump_delay:
-          name: Pump start delay
-          description: Wait time after opening valves before starting pumps.
+    soil_config:
+      name: Soil
+      description: Pick one soil signal and its settings.
+      collapsed: true
+      input:
+        soil_signal:
+          name: Soil signal
+          description: >
+            Select how the condition of the soil is checked. Only the chosen
+            option's fields are used; the others can be left empty.
           default:
-            hours: 0
+            active_choice: timeout
+            timeout: 3
+          selector:
+            choose:
+              choices:
+                moisture:
+                  selector:
+                    object:
+                      fields:
+                        entity:
+                          label: Moisture sensor
+                          selector:
+                            entity:
+                              filter:
+                                - domain: sensor
+                                - domain: input_number
+                        threshold:
+                          label: Irrigate when below (%)
+                          selector:
+                            number:
+                              min: 0
+                              max: 100
+                              unit_of_measurement: "%"
+                              mode: slider
+                rain_mm:
+                  selector:
+                    object:
+                      fields:
+                        entity:
+                          label: Rain sensor
+                          selector:
+                            entity:
+                              filter:
+                                - domain: sensor
+                                - domain: input_number
+                        threshold:
+                          label: Skip at or above (mm)
+                          selector:
+                            number:
+                              min: 0
+                              max: 500
+                              unit_of_measurement: mm
+                              mode: box
+                rain_hours:
+                  selector:
+                    object:
+                      fields:
+                        entity:
+                          label: Rain duration sensor
+                          selector:
+                            entity:
+                              filter:
+                                - domain: sensor
+                                - domain: input_number
+                        threshold:
+                          label: Skip at or above
+                          selector:
+                            duration: {}
+                timeout:
+                  selector:
+                    number:
+                      min: 1
+                      max: 14
+                      unit_of_measurement: days
+                      mode: box
+
+    weather_config:
+      name: Weather
+      description: Weather entity, forecast gate, and wind wait.
+      collapsed: true
+      input:
+        weather_entity:
+          name: Weather entity
+          description: >
+            Required. Weather entity used for present conditions, wind, and the
+            daily forecast. Defaults to weather.forecast_home (the standard
+            Home Assistant entity).
+          default: weather.forecast_home
+          selector:
+            entity:
+              domain: weather
+
+        forecast_dry_days:
+          name: Forecast days to check
+          description: >
+            How many forecast days to inspect, starting from today. If any
+            checked day has a rainy condition, irrigation is skipped.
+            0 = today only. 1 = today and tomorrow. 2 = today + next 2 days.
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 7
+              step: 1
+              unit_of_measurement: days
+              mode: box
+
+        enable_wind_wait:
+          name: Enable wind wait
+          description: >
+            When ON, pause before irrigating if wind is at or above the
+            threshold, up to the configured wait timeout. When OFF, start
+            immediately.
+          default: true
+          selector:
+            boolean: {}
+
+        wind_speed_threshold:
+          name: Max wind speed
+          description: >
+            When wind speed from the weather entity is at or above this value
+            (m/s), wait for calmer conditions before irrigating.
+          default: 8
+          selector:
+            number:
+              min: 0
+              max: 50
+              unit_of_measurement: m/s
+              mode: box
+
+        wind_wait_timeout:
+          name: Wind wait timeout
+          description: >
+            Maximum time to wait for wind to drop. If still too windy
+            afterward, irrigation is skipped.
+          default:
+            hours: 1
             minutes: 0
-            seconds: 2
+            seconds: 0
           selector:
             duration: {}
 
-    schedule_config:
-      name: Schedule
-      description: Daily activation times
+    actuators_config:
+      name: Actuators
+      description: Valves (required) and optional pumps.
       collapsed: true
       input:
-        activation_triggers:
-          name: Activation times
+        valve_entities:
+          name: Valves
           description: >
-            Add one or more time triggers. Irrigation is evaluated at each scheduled time.
-          default:
-            - trigger: time
-              at: "06:00:00"
+            At least one irrigation valve (switch or valve entity) is required.
           selector:
-            trigger: {}
+            entity:
+              multiple: true
+              filter:
+                - domain:
+                    - switch
+                    - valve
+
+        pump_entities:
+          name: Pumps (optional)
+          description: Optional irrigation pumps (switch or valve entities).
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain:
+                    - switch
+                    - valve
+
+    notification_config:
+      name: Notification
+      description: Optional completion notification.
+      collapsed: true
+      input:
+        notify_targets:
+          name: Notification targets (optional)
+          description: >
+            Optional companion-app notify entities (notify.mobile_app_*). Leave
+            empty to disable notifications.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                domain: notify
+                integration: mobile_app
 
 mode: single
 max_exceeded: silent
 
+trigger_variables:
+  manual_entity: !input manual_trigger_entity
+
 variables:
-  moisture_sensor_1: !input moisture_sensor_1
-  moisture_sensor_2: !input moisture_sensor_2
-  moisture_sensor_3: !input moisture_sensor_3
-  moisture_sensor_4: !input moisture_sensor_4
-  moisture_sensor_5: !input moisture_sensor_5
-  immersion_reference_1: !input immersion_reference_1
-  immersion_reference_2: !input immersion_reference_2
-  immersion_reference_3: !input immersion_reference_3
-  immersion_reference_4: !input immersion_reference_4
-  immersion_reference_5: !input immersion_reference_5
-  humidity_threshold: !input humidity_threshold
-  valve_entities: !input valve_entities
+  soil_signal: !input soil_signal
+  weather_entity: !input weather_entity
+  forecast_dry_days: !input forecast_dry_days
+  wind_speed_threshold: !input wind_speed_threshold
   pump_entities: !input pump_entities
-  avg_corrected_moisture: |
-    {% set ns = namespace(values=[]) %}
-    {% set pairs = [
-      (moisture_sensor_1, immersion_reference_1),
-      (moisture_sensor_2, immersion_reference_2),
-      (moisture_sensor_3, immersion_reference_3),
-      (moisture_sensor_4, immersion_reference_4),
-      (moisture_sensor_5, immersion_reference_5),
-    ] %}
-    {% for sensor, ref in pairs %}
-      {% if sensor %}
-        {% set raw = states(sensor) | float(none) %}
-        {% set calibration = ref | float(0) %}
-        {% if raw is not none and calibration > 0 %}
-          {% set ns.values = ns.values + [raw * 100 / calibration] %}
-        {% endif %}
-      {% endif %}
-    {% endfor %}
-    {{ (ns.values | sum / ns.values | length) | round(2) if ns.values else '' }}
-  has_actuators: |
-    {% set valves = valve_entities %}
-    {% set pumps = pump_entities %}
-    {% set valve_list = [valves] if valves is string else (valves or []) %}
-    {% set pump_list = [pumps] if pumps is string else (pumps or []) %}
-    {{ valve_list | length > 0 or pump_list | length > 0 }}
+  notify_targets: !input notify_targets
+  rainy_set:
+    - rainy
+    - pouring
+    - lightning-rainy
+    - hail
+    - snowy-rainy
+    - snowy
 
 trigger:
-  - triggers: !input activation_triggers
-
-condition:
-  - condition: template
-    value_template: >
-      {{ has_actuators | bool }}
-  - condition: template
-    value_template: >
-      {{ avg_corrected_moisture != '' }}
-  - condition: template
-    value_template: >
-      {{ avg_corrected_moisture | float <= humidity_threshold | float }}
+  - trigger: time
+    at: !input activation_time
+    id: scheduled
+  - trigger: state
+    entity_id: !input manual_trigger_entity
+    to: "on"
+    id: manual
+    enabled: "{{ manual_entity | default('') | string | trim != '' }}"
 
 action:
+  # ── Scheduled run: evaluate gates. Manual run: skip straight to irrigation ──
+  - if:
+      - condition: trigger
+        id: scheduled
+    then:
+      # ── Soil gate: stop if soil does not need water ──
+      - if:
+          - condition: not
+            conditions:
+              - condition: template
+                value_template: |
+                  {% set sig = soil_signal %}
+                  {% if sig.active_choice == 'moisture' %}
+                    {% set cfg = sig.moisture | default({}) %}
+                    {% set e = cfg.entity | default('') | string | trim %}
+                    {{ e != '' and states(e) | float(100) < cfg.threshold | float(25) }}
+                  {% elif sig.active_choice == 'rain_mm' %}
+                    {% set cfg = sig.rain_mm | default({}) %}
+                    {% set e = cfg.entity | default('') | string | trim %}
+                    {{ e != '' and states(e) | float(999) < cfg.threshold | float(10) }}
+                  {% elif sig.active_choice == 'rain_hours' %}
+                    {% set cfg = sig.rain_hours | default({}) %}
+                    {% set e = cfg.entity | default('') | string | trim %}
+                    {% set t = cfg.threshold | default({}) %}
+                    {% set threshold_h = (t.hours | default(0) | int)
+                      + (t.minutes | default(0) | int) / 60
+                      + (t.seconds | default(0) | int) / 3600 %}
+                    {{ e != '' and states(e) | float(999) < threshold_h }}
+                  {% elif sig.active_choice == 'timeout' %}
+                    {{ (now().day % (sig.timeout | int(3))) == 0 }}
+                  {% else %}
+                    false
+                  {% endif %}
+        then:
+          - stop: "Soil does not need water"
+
+      # ── Fetch daily forecast (init first so the failure path is safe) ──
+      - variables:
+          wx_daily: {}
+      - action: weather.get_forecasts
+        target:
+          entity_id: !input weather_entity
+        data:
+          type: daily
+        response_variable: wx_daily
+        continue_on_error: true
+
+      # ── Weather gate: stop if raining now or any checked forecast day is wet ──
+      - if:
+          - condition: or
+            conditions:
+              - condition: state
+                entity_id: !input weather_entity
+                state:
+                  - rainy
+                  - pouring
+                  - lightning-rainy
+                  - hail
+                  - snowy-rainy
+                  - snowy
+              - condition: template
+                value_template: >-
+                  {% set ns = namespace(wet=false) %}
+                  {% if wx_daily is mapping and weather_entity in wx_daily %}
+                  {% for f in (wx_daily[weather_entity].forecast | default([]))[: (forecast_dry_days | int(0)) + 1] %}
+                  {% if f.condition | default('') | lower in rainy_set %}
+                  {% set ns.wet = true %}
+                  {% endif %}
+                  {% endfor %}
+                  {% endif %}
+                  {{ ns.wet }}
+        then:
+          - stop: "Weather is or will be wet"
+
+      # ── Wind gate: continue when calm now or once wind drops; stop if still windy at timeout ──
+      - wait_template: "{{ (state_attr(weather_entity, 'wind_speed') | float(0)) < (wind_speed_threshold | float(0)) }}"
+        timeout: !input wind_wait_timeout
+        continue_on_timeout: false
+        enabled: !input enable_wind_wait
+
+  # ── Irrigate ──
+  - action: homeassistant.turn_on
+    target:
+      entity_id: !input valve_entities
   - if:
       - condition: template
-        value_template: >
-          {% set v = valve_entities %}
-          {{ ([v] if v is string else (v or [])) | length > 0 }}
+        value_template: "{{ pump_entities | count > 0 }}"
     then:
+      - delay:
+          seconds: 5
       - action: homeassistant.turn_on
         target:
-          entity_id: !input valve_entities
-
-  - delay: !input pump_delay
-
-  - if:
-      - condition: template
-        value_template: >
-          {% set p = pump_entities %}
-          {{ ([p] if p is string else (p or [])) | length > 0 }}
-    then:
-      - action: homeassistant.turn_on
-        target:
-          entity_id: !input pump_entities
-
+          entity_id: "{{ pump_entities }}"
   - delay: !input irrigation_duration
-
   - if:
       - condition: template
-        value_template: >
-          {% set p = pump_entities %}
-          {{ ([p] if p is string else (p or [])) | length > 0 }}
+        value_template: "{{ pump_entities | count > 0 }}"
     then:
       - action: homeassistant.turn_off
         target:
-          entity_id: !input pump_entities
+          entity_id: "{{ pump_entities }}"
+  - action: homeassistant.turn_off
+    target:
+      entity_id: !input valve_entities
 
+  # ── Log ──
+  - action: system_log.write
+    data:
+      message: "Soil Moisture Irrigation: irrigation completed"
+      level: info
+
+  # ── Notify (templated target + guard, safe when empty) ──
   - if:
       - condition: template
-        value_template: >
-          {% set v = valve_entities %}
-          {{ ([v] if v is string else (v or [])) | length > 0 }}
+        value_template: "{{ notify_targets | count > 0 }}"
     then:
-      - action: homeassistant.turn_off
+      - action: notify.send_message
         target:
-          entity_id: !input valve_entities
+          entity_id: "{{ notify_targets }}"
+        data:
+          title: Soil Moisture Irrigation
+          message: >-
+            Irrigation completed at {{ as_local(now()).strftime('%Y-%m-%d %H:%M') }}.
