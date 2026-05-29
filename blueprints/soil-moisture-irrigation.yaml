@@ -33,19 +33,28 @@ blueprint:
           selector:
             time: {}
 
-        manual_trigger_entity:
+        manual_trigger:
           name: Manual trigger (optional)
           description: >
-            Optional binary_sensor or input_boolean. Select one entity or leave
-            empty to disable. Turning it ON runs irrigation immediately,
-            skipping all checks.
-          default: []
+            NO: scheduled runs only. YES: pick a binary_sensor or input_boolean;
+            turning it ON runs irrigation immediately, skipping all checks.
+          default:
+            active_choice: "NO"
+            "NO": false
           selector:
-            entity:
-              multiple: true
-              filter:
-                - domain: binary_sensor
-                - domain: input_boolean
+            choose:
+              choices:
+                "NO":
+                  selector:
+                    constant:
+                      value: false
+                      label: Scheduled runs only — no manual trigger
+                "YES":
+                  selector:
+                    entity:
+                      filter:
+                        - domain: binary_sensor
+                        - domain: input_boolean
 
         irrigation_duration:
           name: Irrigation duration
@@ -251,7 +260,7 @@ mode: single
 max_exceeded: silent
 
 trigger_variables:
-  manual_entity: !input manual_trigger_entity
+  manual_trigger: !input manual_trigger
 
 variables:
   soil_signal: !input soil_signal
@@ -273,10 +282,10 @@ trigger:
     at: !input activation_time
     id: scheduled
   - trigger: state
-    entity_id: !input manual_trigger_entity
+    entity_id: "{{ manual_trigger.YES | default('') | string | trim }}"
     to: "on"
     id: manual
-    enabled: "{{ manual_entity | default([]) | count > 0 }}"
+    enabled: "{{ manual_trigger.active_choice == 'YES' }}"
 
 action:
   # ── Scheduled run: evaluate gates. Manual run: skip straight to irrigation ──
