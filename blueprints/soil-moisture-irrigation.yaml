@@ -36,11 +36,13 @@ blueprint:
         manual_trigger_entity:
           name: Manual trigger (optional)
           description: >
-            Optional binary_sensor or input_boolean. Turning it ON runs
-            irrigation immediately, skipping all checks. Leave empty to disable.
-          default: ""
+            Optional binary_sensor or input_boolean. Select one entity or leave
+            empty to disable. Turning it ON runs irrigation immediately,
+            skipping all checks.
+          default: []
           selector:
             entity:
+              multiple: true
               filter:
                 - domain: binary_sensor
                 - domain: input_boolean
@@ -274,7 +276,7 @@ trigger:
     entity_id: !input manual_trigger_entity
     to: "on"
     id: manual
-    enabled: "{{ manual_entity | default('') | string | trim != '' }}"
+    enabled: "{{ manual_entity | default([]) | count > 0 }}"
 
 action:
   # ── Scheduled run: evaluate gates. Manual run: skip straight to irrigation ──
