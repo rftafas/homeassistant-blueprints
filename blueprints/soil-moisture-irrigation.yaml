@@ -40,7 +40,6 @@ blueprint:
             turning it ON runs irrigation immediately, skipping all checks.
           default:
             active_choice: "NO"
-            "NO": false
           selector:
             choose:
               choices:
