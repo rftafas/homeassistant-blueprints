@@ -280,11 +280,14 @@ trigger:
   - trigger: time
     at: !input activation_time
     id: scheduled
-  - trigger: state
-    entity_id: "{{ manual_trigger.YES | default('') | string | trim }}"
-    to: "on"
+  - trigger: template
+    value_template: |
+      {% if manual_trigger.active_choice == 'YES' %}
+        {{ is_state(manual_trigger.YES, 'on') }}
+      {% else %}
+        false
+      {% endif %}
     id: manual
-    enabled: "{{ manual_trigger.active_choice == 'YES' }}"
 
 action:
   # ── Scheduled run: evaluate gates. Manual run: skip straight to irrigation ──
