@@ -7,7 +7,7 @@ This repository contains Home Assistant blueprints for automations.
 | Integration | Description                       | Installation |
 | ---         | ---                               | ---
 | N-Way Interrupts | Sets multiple switches to control a light entity | [![Add to my Home Assistant](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://raw.githubusercontent.com/rftafas/homeassistant-blueprints/main/blueprints/n_way_irq.yaml) |
-| Simple Climate Automation | Climate Automation, with setpoint, presence and external reading | [![Add to my Home Assistant](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://raw.githubusercontent.com/rftafas/homeassistant-blueprints/main/blueprints/climate-automation.yaml) |
+| Simple Climate Automation | Day/night climate with split room/outside sensors, independent day/night boundaries, manual lock, window ventilation, and forecast-temperature night mode | [![Add to my Home Assistant](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://raw.githubusercontent.com/rftafas/homeassistant-blueprints/main/blueprints/climate-automation.yaml) |
 | Shutter Emulation | Automation for no-feedback RF Shutter/Window/Curtain controllers (using TasmotaRF) | [![Add to my Home Assistant](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://raw.githubusercontent.com/rftafas/homeassistant-blueprints/main/blueprints/shutter_helper_automation.yaml) |
 | Light Timer | Turns off after configurable time (day and night times) | [![Add to my Home Assistant](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://raw.githubusercontent.com/rftafas/homeassistant-blueprints/main/blueprints/timed-light.yaml) |
 | Alarm Panel Actions | Run user-defined actions per alarm_control_panel state (disarmed, arming, pending, armed_*, triggered) | [![Add to my Home Assistant](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://raw.githubusercontent.com/rftafas/homeassistant-blueprints/main/blueprints/alarm-panel-actions.yaml) |
@@ -20,6 +20,102 @@ This repository contains Home Assistant blueprints for automations.
 ## Usage
 
 Click the button next to each blueprint to import it directly into your Home Assistant instance.
+
+### Simple Climate Automation
+
+Reactive climate control with **`mode: single`** (triggers during a run are ignored). **Triggers:**
+
+1. **Indoor temperature** (`room_temp_change`) — any state change on **`room_temperature_sensors`**
+2. **Outdoor temperature** (`outside_temp_change`) — any state change on **`outside_temperature_sensors`**
+3. **Setpoint** (`setpoint_change`) — external day and/or night entity when configured
+4. **Day / night boundaries** (`day_begin` / `night_begin`) — **`day_boundary`** (day config) and **`night_boundary`** (night config) are independent: each **sun** or **fixed** clock time
+5. **Openings** — optional **NO** / **YES**; **`window_change`** when YES (any sensor state change)
+6. **Presence** (`presence_change`) — template trigger when **`occupation_sensor`** is **YES** (any state change)
+7. **HVAC configuration** (`hvac_config`) — **`trigger: state`** on **`hvac_mode`**, target **`temperature`**, or **`fan_mode`**; manual lock when occupied
+8. **Manual re-evaluation** (`manual`) — optional helper ON forces a run from current state
+9. **Day/night enable** (`day_enable_on` / `night_enable_on`) — helper **ON** re-evaluates; **off** does not trigger
+
+**Input sections:** `main_config` (HVAC, optional `manual_trigger`), `temperature_config` (room/outdoor sensors), `presence_config` (optional `occupation_sensor` with **`manual_lock`**), `windows_config` (optional `windows_sensors`), `day_config` (optional enable, **`day_boundary`**, `day_set_point`), `night_config` (optional enable, **`night_set_point`**, **`night_boundary`**, **`forecast_temperature`**).
+
+**Presence (`occupation_sensor` choose):** **NO** (default) — no presence routing. **YES** — entity, **`presence_unoccupied_duration`**, optional **`manual_lock`**; **`room_unoccupied`** sets target off after duration; presence **off** skips day/night via climate gate (`is_state on`).
+
+**Windows (`windows_sensors` choose):** **NO** (default). **YES** — sensor list + optional **`window_open_duration`** (deprecated, unused by action logic); **`window_change`** trigger; **`any_window_open`** → vent (`fan_only` + low) in ±2 °C band else off.
+
+**Temperature sensors (separate lists):**
+
+| Input | Role |
+| --- | --- |
+| **`room_temperature_sensors`** | Indoor — `room_temp` average (day bands) |
+| **`outside_temperature_sensors`** | Outdoor — `outside_temp` (ventilation ±2 °C band) |
+| **`forecast_temperature`** | Night mode — single entity → `forecast_temp` |
+
+**Variables:** `room_temp`, `outside_temp`, `forecast_temp`, `comfort_delta`, `any_window_open`, `room_unoccupied`, `outside_in_ventilation_band`, `daytime_auto_climate_enabled`, `nighttime_auto_climate_enabled`.
+
+**Day vs night:** **`day_boundary`** and **`night_boundary`** are configured separately (each **sun** or **fixed**). **`is_day`** requires both: day side passed (above horizon or `now ≥ day_time`) and night side not ended (above horizon or `now < night_time`). Example: day **sun** + night **fixed** 22:00 → daytime from sunrise until sunset and before 22:00. Night mode uses **`forecast_temp`** from single entity **`forecast_temperature`**. Action order: manual lock → window → presence → climate control (sets **`target_*`**) → single idempotent apply. Climate gated by **`not any_window_open`** and presence **on** when configured.
+
+**Day/night enable:** **NO** (default) = always on; **YES** = helper + enable gate on day/night branches. **YES** accepts **`input_boolean`** or **`binary_sensor`** for day and night.
+
+**Night setpoint:** **`night_set_point`** choose — **`day_copy`** (default, uses day setpoint), **`fixed`** (slider), or **`external`** (temperature **`sensor`**, **`number`**, or **`input_number`**).
+
+**Manual lock:** under **`occupation_sensor` YES** only — on/off (default on). When on, a user change to **HVAC mode, target temp, or fan** while occupied starts a **wait up to 4 hours** for the room to become empty; this run skips automatic bands until the wait ends. Echo from this automation’s own `climate.set_*` is suppressed by **`mode: single`** plus the **5 s delay** after commanded services.
+
+**HVAC availability:** Top-level [automation `conditions:`](https://www.home-assistant.io/docs/automation/condition/) skip the run if **any** configured climate entity is `unavailable` or `unknown` (all must be reachable before actions execute).
+
+**Manual trigger (optional):** `manual_trigger` choose — **NO** (default) or **YES** with an `input_boolean` / `binary_sensor`. When the helper turns **ON**, the automation re-evaluates using **current state** (priority order):
+
+| Condition | Behavior |
+| --- | --- |
+| Presence **YES** and `off` | Climate skipped; targets stay default off unless window/long-unoccupied overrides |
+| Presence **NO**, or occupied, no window open, lock off | Normal day/night bands set **`target_*`** |
+
+After any commanded `climate.set_*`, a **5 s delay** runs before the run ends.
+
+**Ventilation:** fixed ±2 °C from base `setpoint` (not night offset); no blueprint input.
+
+Does **not** set manual lock (only `hvac_config` while presence **YES** and occupied when `manual_lock` is on). External example:
+
+```yaml
+action:
+  - action: input_boolean.turn_on
+    target:
+      entity_id: input_boolean.climate_recheck
+```
+
+**Windows/doors (optional):** **YES** — **`any_window_open`** (any sensor `on`) → vent band or **off** via **`target_*`**; climate configure skipped while open.
+
+**HVAC apply:** Single idempotent block at end — **`target_mode == 'off'`** → `climate.set_hvac_mode`; else `climate.set_temperature` + `climate.set_fan_mode`. **5 s delay** only after a service runs.
+
+**Breaking changes (re-save required):**
+
+| Old | New |
+| --- | --- |
+| `room_temperature` choose | `room_temperature_sensors` (indoor multi-entity) |
+| `outside_temperature` choose | `outside_temperature_sensors` (outdoor multi-entity) |
+| `hvac_config` any state change | **`trigger: state`** on `hvac_mode` / `temperature` / `fan_mode` only |
+| `parent_id` manual-lock guard | Removed — `mode: single` + 5 s post-command delay |
+| `temp_source` (single choose) | (superseded by separate sensor lists above) |
+| `measured_temp` | `room_temp` (+ `outside_temp` for ventilation) |
+| `window_suspend_duration` | `windows_sensors.YES.window_open_duration` (deprecated — unused by action logic) |
+| `window_suspend` trigger | **`window_change`** + **`any_window_open`** |
+| `automation_suspended` | `any_window_open` (climate gate while open) |
+| `measured_temp_change` | `room_temp_change` + `outside_temp_change` |
+| `ventilation_band` input | Removed — fixed ±2 °C from setpoint |
+| `temp_set_point` in `threshold_config` | `day_set_point` in `day_config` |
+| `night_offset` choose / `night_setpoint_independent` | **`night_set_point`**: **`day_copy`** / **`fixed`** / **`external`** |
+| `occupation_sensor` entity | Optional **NO** / **YES** object (`entity`, duration, **`manual_lock`**) |
+| `presence_unoccupied_duration` (top-level) | `occupation_sensor.YES.presence_unoccupied_duration` |
+| `windows_sensors` (required list) | Optional **NO** / **YES** object (`sensors` + `window_open_duration`) |
+| `window_open_duration` (top-level) | `windows_sensors.YES.window_open_duration` |
+| — | **`manual_lock`** under `occupation_sensor.YES` (4 h wait on user HVAC change) |
+| — | `manual_trigger` optional helper (new) |
+| `daytime_auto_climate_enable` / `nighttime_auto_climate_enable` `boolean:` | Optional **NO** / **YES** + helper; **YES**: **`input_boolean`** or **`binary_sensor`** |
+| `day_start` / `night_start` / `period_boundary` | **`day_boundary`** + **`night_boundary`** (independent sun/fixed per period) |
+| `forecast_source` choose | **`forecast_temperature`** (required) — single entity → **`forecast_temp`** |
+| `weather_entity` | Removed — night uses **`forecast_temperature`** only |
+| `forecast_temperature_sensors` | **`forecast_temperature`** — single entity, no averaging |
+| `presence_off` / `presence_on` | **`presence_change`** + **`room_unoccupied`** variable |
+| `window_open` / `window_close` | **`window_change`** + **`any_window_open`** |
+| `mode: restart` | `mode: single` |
 
 ### Soil Moisture Irrigation
 
