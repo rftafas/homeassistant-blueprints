@@ -1,14 +1,18 @@
 blueprint:
-  name: "Simple Climate Control"
+  name: Simple Climate Control
   description: >
-    Simple Climate control:  
-    - Tries to maintain the room no far than 4°C from setpoint (up or down) during daytime.
-    - Tries to maintaing setpoint during night time on reduced noise and wind.
-    - When the room is occupied, it activates climate mode to reach set-point.  
-    - It disables climate mode when a door is opened.  
+    Reactive day/night climate for one or more HVAC entities: daytime comfort bands (4 °C), nighttime mode from a forecast temperature, optional presence and openings, and a single idempotent apply per run.
 
-    The goal is to make this automation simple and effective, avoiding unnecessary climate activation when the room is unoccupied or when a door is open (e.g. for airing out the room).
+    - **Day:** setpoint-driven cool/heat/auto and fan bands
 
+
+    - **Night:** forecast vs night setpoint (cool / auto / heat)
+
+
+    - **Triggers:** room and outdoor temperature, boundaries, presence/windows, HVAC changes, optional manual re-evaluation helper
+
+
+    - **Optional:** day/night enable helpers, manual lock after user HVAC changes while occupied (presence YES)
   domain: automation
   author: rftafas
   homeassistant:
@@ -17,207 +21,607 @@ blueprint:
   input:
     main_config:
       name: Main Configuration
-      description: Core configuration entities
-      collapsed: false
+      description: HVAC targets and optional manual re-evaluation.
+      collapsed: true
       input:
-        daytime_auto_climate_enable:
-          name: Day time Climate Automation
-          description: >
-            Day time Climate Automation.
-          selector:
-            entity:
-              filter:
-                - domain:
-                    - input_boolean
-        nighttime_auto_climate_enable:
-          name: Night time Climate Automation
-          description: >
-            Night time Climate Automation.
-          selector:
-            entity:
-              filter:
-                - domain:
-                    - input_boolean
         hvac_entity:
           name: HVAC Entity
           description: >
-            HVAC Entity
-            - The HVAC entity to control.
-            - More than one is allowed but they will all be set to the same mode and temperature.
+            One or more climate entities; each run applies the same mode, target temperature, and fan mode.
           selector:
             entity:
               multiple: true
               filter:
                 domain: climate
 
-    threshold_config:
-      name: Thresholds and Sensors
-      description: Temperature sensors and thresholds
+        manual_trigger:
+          name: Manual trigger (optional)
+          description: >
+            Re-run climate logic from current state when a helper turns on.
+
+            - **NO:** automatic triggers only
+
+
+            - **YES:** `input_boolean` or `binary_sensor` — ON forces a run
+          default:
+            active_choice: "NO"
+          selector:
+            choose:
+              choices:
+                "NO":
+                  selector:
+                    constant:
+                      value: false
+                      label: Automatic triggers only
+                "YES":
+                  selector:
+                    entity:
+                      filter:
+                        - domain: binary_sensor
+                        - domain: input_boolean
+
+    temperature_config:
+      name: Temperature sensors
+      description: Indoor and outdoor sources for day bands and ventilation.
       collapsed: true
       input:
-        room_temp_sensors:
-          name: Room Temperature Sensors
+        room_temperature_sensors:
+          name: Indoor temperature sensors
           description: >
-            List of Room Temperature Sensors to average.
-            If only one, just select it.
+            Averaged for daytime comfort bands and logic.
+
+            - **Domains:** `sensor`, `number` (not `input_number`)
+
+
+            - **Required:** one or more entities
           selector:
             entity:
               multiple: true
               filter:
-                domain: sensor
-                device_class: temperature
+                - domain: sensor
+                - domain: number
 
-        external_temp_sensor:
-          name: External Temperature Sensor
+        outside_temperature_sensors:
+          name: Outdoor temperature sensors
           description: >
-            External Temperature Sensor.
-            - If the usual wheather is used, create a helper temperature sensor.
-            - If many sensors are to be considered, an average temperature sensor helper must be created.
+            Averaged for the window ventilation band (±2 °C from day setpoint).
+
+            - **Domains:** `sensor`, `number` (not `input_number`)
+
+
+            - **Required:** one or more entities
           selector:
             entity:
-              multiple: false
+              multiple: true
               filter:
-                domain: sensor
-                device_class: temperature
+                - domain: sensor
+                - domain: number
 
+    presence_config:
+      name: Presence
+      description: Optional presence routing and manual lock after user HVAC changes.
+      collapsed: true
+      input:
         occupation_sensor:
-          name: Room Occupation Sensor
+          name: Room occupation sensor (optional)
           description: >
-            Room Occupation Sensor
-            - Presence entity is requested.
-            - If none available, use a helper entity.
-          selector:
-            entity:
-              multiple: false
-              filter:
-                domain: binary_sensor
-                device_class: presence
+            Gates day/night climate and can turn HVAC off after unoccupied duration. Any presence entity state change re-evaluates the run.
 
+
+            - **NO:** no presence-based routing
+
+
+            - **YES:** presence entity, unoccupied duration, optional manual lock (default on — user HVAC change while occupied waits up to 4 h or until unoccupied before auto climate resumes)
+          default:
+            active_choice: "NO"
+            YES:
+              presence_unoccupied_duration:
+                hours: 0
+                minutes: 10
+                seconds: 0
+              manual_lock: true
+          selector:
+            choose:
+              choices:
+                "NO":
+                  selector:
+                    constant:
+                      value: false
+                      label: No presence sensor
+                "YES":
+                  selector:
+                    object:
+                      fields:
+                        entity:
+                          label: Presence entity
+                          selector:
+                            entity:
+                              filter:
+                                - domain: binary_sensor
+                                  device_class: presence
+                                - domain: input_boolean
+                        presence_unoccupied_duration:
+                          label: Unoccupied duration before HVAC off
+                          selector:
+                            duration: {}
+                        manual_lock:
+                          label: Manual lock
+                          selector:
+                            boolean: {}
+
+    windows_config:
+      name: Windows and doors
+      description: Optional opening sensors and ventilation suspend while open.
+      collapsed: true
+      input:
         windows_sensors:
-          name: Windows / Doors Sensor
+          name: Windows / doors (optional)
           description: >
-            Windows / Doors Sensor
-            - All selected windows must be closed (off).
-            - In case of complex logic between windows, create a group sensor.
+            While any opening is reported open, HVAC uses ventilation band or
+            off and day/night logic is skipped until all are closed. Use sensors
+            whose state already reflects when you want action (debounce/delay
+            on the device).
+
+            Sensor convention: **off** = closed, **on** = open.
+
+            - **NO:** no window-based routing
+            - **YES:** pick opening sensors
+          default:
+            active_choice: "NO"
+            YES:
+              window_open_duration:
+                hours: 0
+                minutes: 5
+                seconds: 0
+          selector:
+            choose:
+              choices:
+                "NO":
+                  selector:
+                    constant:
+                      value: false
+                      label: No window sensors
+                "YES":
+                  selector:
+                    object:
+                      fields:
+                        sensors:
+                          label: Window / door sensors
+                          selector:
+                            entity:
+                              multiple: true
+                              filter:
+                                domain: binary_sensor
+                        window_open_duration:
+                          label: Open duration before ventilation action
+                          selector:
+                            duration: {}
+
+    day_config:
+      name: Day
+      description: Daytime enable, boundary, and setpoint.
+      collapsed: true
+      input:
+        daytime_auto_climate_enable:
+          name: Daytime enable helper (optional)
+          description: >
+            Gate daytime reactive logic without removing the automation.
+
+            - **NO:** daytime climate always runs
+
+
+            - **YES:** `input_boolean` or `binary_sensor` — when off, daytime bands are skipped and HVAC is left unchanged
+          default:
+            active_choice: "NO"
+          selector:
+            choose:
+              choices:
+                "NO":
+                  selector:
+                    constant:
+                      value: false
+                      label: Always enabled — no helper
+                "YES":
+                  selector:
+                    entity:
+                      filter:
+                        - domain: binary_sensor
+                        - domain: input_boolean
+
+        day_boundary:
+          name: Day boundary
+          description: >
+            When daytime begins (night ends). Independent of night boundary.
+
+            - **sun:** sunrise (sun is above horizon)
+
+
+            - **fixed:** clock time when day starts
+          default:
+            active_choice: sun
+          selector:
+            choose:
+              choices:
+                sun:
+                  selector:
+                    constant:
+                      value: true
+                      label: Sunrise
+                fixed:
+                  selector:
+                    object:
+                      fields:
+                        time:
+                          label: Day begins
+                          selector:
+                            time: {}
+
+        day_set_point:
+          name: Day setpoint
+          description: >
+            Target for daytime comfort bands and ventilation reference. External entity changes trigger re-evaluation.
+
+            - **fixed:** slider (18–30 °C)
+
+
+            - **external:** `input_number` entity
+          default:
+            active_choice: fixed
+            fixed: 24
+          selector:
+            choose:
+              choices:
+                fixed:
+                  selector:
+                    number:
+                      min: 18
+                      max: 30
+                      unit_of_measurement: °C
+                      mode: slider
+                external:
+                  selector:
+                    entity:
+                      filter:
+                        domain: input_number
+
+    night_config:
+      name: Night
+      description: Nighttime enable, boundary, setpoint, and forecast.
+      collapsed: true
+      input:
+        nighttime_auto_climate_enable:
+          name: Nighttime enable helper (optional)
+          description: >
+            Gate nighttime mode selection without removing the automation.
+
+            - **NO:** nighttime climate always runs
+
+
+            - **YES:** `input_boolean` or `binary_sensor` — when off, night logic is skipped and HVAC is left unchanged
+          default:
+            active_choice: "NO"
+          selector:
+            choose:
+              choices:
+                "NO":
+                  selector:
+                    constant:
+                      value: false
+                      label: Always enabled — no helper
+                "YES":
+                  selector:
+                    entity:
+                      filter:
+                        - domain: binary_sensor
+                        - domain: input_boolean
+
+        night_set_point:
+          name: Night setpoint
+          description: >
+            Compared to forecast temperature for nighttime cool / auto / heat. External entity changes trigger re-evaluation.
+
+            - **day_copy:** use daytime setpoint
+
+
+            - **fixed:** slider (18–30 °C)
+
+
+            - **external:** temperature `sensor`, `number`, or `input_number`
+          default:
+            active_choice: day_copy
+            fixed: 24
+          selector:
+            choose:
+              choices:
+                day_copy:
+                  selector:
+                    constant:
+                      value: true
+                      label: Day setpoint copy
+                fixed:
+                  selector:
+                    number:
+                      min: 18
+                      max: 30
+                      unit_of_measurement: °C
+                      mode: slider
+                external:
+                  selector:
+                    entity:
+                      filter:
+                        - domain: sensor
+                          device_class: temperature
+                        - domain: number
+                        - domain: input_number
+
+        night_boundary:
+          name: Night boundary
+          description: >
+            When nighttime begins (day ends). Independent of day boundary.
+
+            - **sun:** sunset (below horizon)
+
+
+            - **fixed:** clock time when night starts
+          default:
+            active_choice: sun
+          selector:
+            choose:
+              choices:
+                sun:
+                  selector:
+                    constant:
+                      value: true
+                      label: Sunset
+                fixed:
+                  selector:
+                    object:
+                      fields:
+                        time:
+                          label: Night begins
+                          selector:
+                            time: {}
+
+        forecast_temperature:
+          name: Forecast temperature
+          description: >
+            Single entity for nighttime mode selection (cool / auto / heat vs night setpoint). Use a template sensor, forecast entity, or outdoor temperature as needed.
           selector:
             entity:
-              multiple: true
               filter:
-                domain: binary_sensor
-
-        temp_set_point:
-          name: Temperature Set Point
-          description: >
-            Temperature Set Point
-            - Desired temperature set point.
-            - The automation will try to keep the room within 4 degrees of this set point.
-            - The source should be an input_number helper, external thermostats or any temperature select device.
-          default: 24
-          selector:
-            number:
-              min: 18
-              max: 30
-              unit_of_measurement: °C
-              mode: slider
+                - domain: sensor
+                  device_class: temperature
+                - domain: number
 
 mode: single
 max_exceeded: silent
 
+trigger_variables:
+  day_set_point: !input day_set_point
+  night_set_point: !input night_set_point
+  day_boundary: !input day_boundary
+  night_boundary: !input night_boundary
+  hvac_entity: !input hvac_entity
+  manual_trigger: !input manual_trigger
+  occupation_sensor: !input occupation_sensor
+  windows_sensors: !input windows_sensors
+  daytime_auto_climate_enable: !input daytime_auto_climate_enable
+  nighttime_auto_climate_enable: !input nighttime_auto_climate_enable
+
 variables:
-  internal_room_temperatures: !input room_temp_sensors
-  internal_setpoint: !input temp_set_point
-  external_temperature: !input external_temp_sensor
-  all_windows: !input windows_sensors
-  avg_internal_temp: >
-    {% set temps = internal_room_temperatures | map('states') | map('float') | list %}
-    {% if temps | length > 0 %}
-      {{ (temps | sum) / (temps | length) }}
+  # Entities from inputs as variables
+  hvac_entity: !input hvac_entity
+  room_temperature_sensors: !input room_temperature_sensors
+  outside_temperature_sensors: !input outside_temperature_sensors
+  forecast_temperature: !input forecast_temperature
+  occupation_sensor: !input occupation_sensor
+  windows_sensors: !input windows_sensors
+  day_set_point: !input day_set_point
+  day_boundary: !input day_boundary
+  night_boundary: !input night_boundary
+  night_set_point: !input night_set_point
+  daytime_auto_climate_enable: !input daytime_auto_climate_enable
+  nighttime_auto_climate_enable: !input nighttime_auto_climate_enable
+  # Helpers and variables
+  daytime_auto_climate_enabled: >
+    {% if daytime_auto_climate_enable.active_choice == 'YES' %}
+      {{ is_state(daytime_auto_climate_enable.YES, 'on') }}
     {% else %}
+      true
+    {% endif %}
+  nighttime_auto_climate_enabled: >
+    {% if nighttime_auto_climate_enable.active_choice == 'YES' %}
+      {{ is_state(nighttime_auto_climate_enable.YES, 'on') }}
+    {% else %}
+      true
+    {% endif %}
+  setpoint: >
+    {% if day_set_point.active_choice == 'fixed' %}
+      {{ day_set_point.fixed | float(24) }}
+    {% else %}
+      {{ states(day_set_point.external) | float(24) }}
+    {% endif %}
+  room_temp: >
+    {% set ns = namespace(values=[]) %}
+    {% for e in expand(room_temperature_sensors) %}
+      {% if e.state not in ['unavailable', 'unknown', 'none', ''] %}
+        {% set v = e.state | float(none) %}
+        {% if v is number %}
+          {% set ns.values = ns.values + [v] %}
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+    {{ (ns.values | sum) / (ns.values | length) if ns.values | length > 0 else 0 }}
+  outside_temp: >
+    {% set ns = namespace(values=[]) %}
+    {% for e in expand(outside_temperature_sensors) %}
+      {% if e.state not in ['unavailable', 'unknown', 'none', ''] %}
+        {% set v = e.state | float(none) %}
+        {% if v is number %}
+          {% set ns.values = ns.values + [v] %}
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+    {{ (ns.values | sum) / (ns.values | length) if ns.values | length > 0 else 0 }}
+  forecast_temp: >
+    {% set v = states(forecast_temperature) %}
+    {% if v in ['unavailable', 'unknown', 'none', ''] %}
       0
+    {% else %}
+      {{ v | float(0) }}
     {% endif %}
   any_window_open: >
-    {{ expand(all_windows) | selectattr('state', 'equalto', 'on') | list | count > 0 }}
+    {% if windows_sensors.active_choice == 'YES' %}
+      {% set ns = namespace(found=false) %}
+      {% for e in expand(windows_sensors.YES.sensors) %}
+        {% if e.state == 'on' %}
+          {% set ns.found = true %}
+        {% endif %}
+      {% endfor %}
+      {{ ns.found }}
+    {% else %}
+      false
+    {% endif %}
+  room_unoccupied: >
+    {% if occupation_sensor.active_choice == 'YES' %}
+      {% set entity = occupation_sensor.YES.entity %}
+      {% set duration = occupation_sensor.YES.presence_unoccupied_duration | as_timedelta %}
+      {{ is_state(entity, 'off') and (now() - states[entity].last_changed) >= duration }}
+    {% else %}
+      false
+    {% endif %}
+  is_day: >
+    {% if day_boundary.active_choice == 'sun' %}
+      {% set day_ok = is_state('sun.sun', 'above_horizon') %}
+    {% else %}
+      {% set day_ok = now() >= today_at(day_boundary.fixed.time) %}
+    {% endif %}
+    {% if night_boundary.active_choice == 'sun' %}
+      {% set night_ok = is_state('sun.sun', 'above_horizon') %}
+    {% else %}
+      {% set night_ok = now() < today_at(night_boundary.fixed.time) %}
+    {% endif %}
+    {{ day_ok and night_ok }}
+  night_setpoint: >
+    {% if night_set_point.active_choice == 'day_copy' %}
+      {{ setpoint | float }}
+    {% elif night_set_point.active_choice == 'fixed' %}
+      {{ night_set_point.fixed | float(24) }}
+    {% else %}
+      {{ states(night_set_point.external) | float(24) }}
+    {% endif %}
 
-trigger:
-  - trigger: template
-    value_template: |
-      {% set temp = avg_internal_temp | float %}
-      {% set target = internal_setpoint | float %}
-      {{ temp - target <= 4.0 }}
-  - trigger: template
-    value_template: |
-      {% set temp = avg_internal_temp | float %}
-      {% set target = internal_setpoint | float %}
-      {{ 2.0 <= temp - target < 4.0 }}
-  - trigger: template
-    value_template: |
-      {% set temp = avg_internal_temp | float %}
-      {% set target = internal_setpoint | float %}
-      {{ 0.5 <= temp - target < 2.0 }}
-  - trigger: template
-    value_template: |
-      {% set temp = avg_internal_temp | float %}
-      {% set target = internal_setpoint | float %}
-      {{ -0.5 < temp - target < 0.5 }}
-  - trigger: template
-    value_template: |
-      {% set temp = avg_internal_temp | float %}
-      {% set target = internal_setpoint | float %}
-      {{ -2.0 < temp - target <= -0.5 }}
-  - trigger: template
-    value_template: |
-      {% set temp = avg_internal_temp | float %}
-      {% set target = internal_setpoint | float %}
-      {{ -4.0 < temp - target <= -2.0 }}
-  - trigger: template
-    value_template: |
-      {% set temp = avg_internal_temp | float %}
-      {% set target = internal_setpoint | float %}
-      {{ temp - target <= -4.0 }}
-  - trigger: template
-    value_template: |
-      {% set temp = avg_internal_temp | float %}
-      {% set target = internal_setpoint | float %}
-      {{ -0.5 < temp - target < 0.5 }}
-    for:
-      hours: 0
-      minutes: 20
-      seconds: 0
-    id: temperature-is-stable
+triggers:
   - trigger: state
-    entity_id:
-      - !input windows_sensors
-    from:
-      - "off"
-    to:
-      - "on"
-  - trigger: state
-    entity_id:
-      - !input occupation_sensor
-    from:
-      - "off"
-    to:
-      - "on"
-    for:
-      hours: 0
-      minutes: 1
-      seconds: 0
-  - trigger: state
-    entity_id:
-      - !input occupation_sensor
-    from:
-      - "on"
-    to:
-      - "off"
-    for:
-      hours: 0
-      minutes: 15
-      seconds: 0
-  - trigger: state
-    entity_id:
-      - !input external_temp_sensor
+    entity_id: !input room_temperature_sensors
+    id: room_temp_change
 
-condition:
+  - trigger: state
+    entity_id: !input outside_temperature_sensors
+    id: outside_temp_change
+
+  - trigger: template
+    value_template: |
+      {% if day_set_point.active_choice == 'external' %}
+        {{ states(day_set_point.external) }}
+      {% else %}
+        false
+      {% endif %}
+    id: setpoint_change
+
+  - trigger: template
+    value_template: |
+      {% if night_set_point.active_choice == 'external' %}
+        {{ states(night_set_point.external) }}
+      {% else %}
+        false
+      {% endif %}
+    id: setpoint_change
+
+  - trigger: template
+    value_template: |
+      {% if occupation_sensor.active_choice == 'YES' %}
+        {{ states(occupation_sensor.YES.entity) }}
+      {% else %}
+        false
+      {% endif %}
+    id: presence_change
+
+  - trigger: template
+    value_template: |
+      {% if windows_sensors.active_choice == 'YES' %}
+        {{ expand(windows_sensors.YES.sensors) | map(attribute='state') | join('|') }}
+      {% else %}
+        false
+      {% endif %}
+    id: window_change
+
+  - trigger: sun
+    event: sunrise
+    id: day_begin
+    enabled: "{{ day_boundary.active_choice == 'sun' }}"
+
+  - trigger: sun
+    event: sunset
+    id: night_begin
+    enabled: "{{ night_boundary.active_choice == 'sun' }}"
+
+  - trigger: time
+    id: day_begin
+    enabled: "{{ day_boundary.active_choice == 'fixed' }}"
+    at: >
+      {% if day_boundary.active_choice == 'fixed' %}
+        {{ day_boundary.fixed.time }}
+      {% else %}
+        00:00:00
+      {% endif %}
+
+  - trigger: time
+    id: night_begin
+    enabled: "{{ night_boundary.active_choice == 'fixed' }}"
+    at: >
+      {% if night_boundary.active_choice == 'fixed' %}
+        {{ night_boundary.fixed.time }}
+      {% else %}
+        00:00:00
+      {% endif %}
+
+  - trigger: state
+    entity_id: !input hvac_entity
+    attribute:
+      - hvac_mode
+      - temperature
+      - fan_mode
+    id: hvac_config
+
+  - trigger: template
+    value_template: |
+      {% if manual_trigger.active_choice == 'YES' %}
+        {{ is_state(manual_trigger.YES, 'on') }}
+      {% else %}
+        false
+      {% endif %}
+    id: manual
+
+  - trigger: template
+    value_template: |
+      {% if daytime_auto_climate_enable.active_choice == 'YES' %}
+        {{ is_state(daytime_auto_climate_enable.YES, 'on') }}
+      {% else %}
+        false
+      {% endif %}
+    id: day_enable_on
+
+  - trigger: template
+    value_template: |
+      {% if nighttime_auto_climate_enable.active_choice == 'YES' %}
+        {{ is_state(nighttime_auto_climate_enable.YES, 'on') }}
+      {% else %}
+        false
+      {% endif %}
+    id: night_enable_on
+
+conditions:
   - condition: not
     conditions:
       - condition: state
@@ -226,260 +630,133 @@ condition:
           - unavailable
           - unknown
 
-action:
-  - choose:
-      - conditions:
+actions:
+  - variables:
+      target_mode: off
+      target_fan: low
+      target_temp: 24
+
+  # Manual lock
+  - if:
+      conditions:
+        - condition: trigger
+          id: hvac_config
+        - condition: template
+          value_template: "{{ not room_unoccupied }}"
+    then:
+      - wait_for_trigger:
+          - trigger: template
+            value_template: "{{ room_unoccupied }}"
+        timeout:
+          hours: 4
+        continue_on_timeout: true
+
+  # Window
+  - if:
+      - condition: template
+        value_template: "{{ any_window_open }}"
+    then:
+      - if:
           - condition: template
-            value_template: >
-              {{ any_window_open }}
-        sequence:
-          - service: climate.set_hvac_mode
-            target:
-              entity_id: !input hvac_entity
-            data:
-              hvac_mode: "off"
-      - conditions:
-          - condition: state
-            entity_id: !input daytime_auto_climate_enable
-            state: "on"
-          - condition: state
-            entity_id: !input occupation_sensor
-            state: "on"
-          - condition: state
-            entity_id: sun.sun
-            state: 'above_horizon'
-            for:
-              hours: 0
-              minutes: 1
-              seconds: 0
-        sequence:
-          - choose:
-              - conditions:
-                  - condition: template
-                    value_template: >
-                      {% set temp = avg_internal_temp | float %}
-                      {% set target = internal_setpoint | float %}
-                      {{ temp - target > 4.0 }}
-                sequence:
-                  - service: climate.set_temperature
-                    target:
-                      entity_id: !input hvac_entity
-                    data:
-                      hvac_mode: cool
-                      temperature: !input temp_set_point
-                  - service: climate.set_fan_mode
-                    data:
-                      fan_mode: high
-                    target:
-                      entity_id: !input hvac_entity
-              - conditions:
-                  - condition: template
-                    value_template: >
-                      {% set temp = avg_internal_temp | float %}
-                      {% set target = internal_setpoint | float %}
-                      {{ 2.0 < temp - target <= 4.0 }}
-                sequence:
-                  - service: climate.set_temperature
-                    target:
-                      entity_id: !input hvac_entity
-                    data:
-                      hvac_mode: cool
-                      temperature: !input temp_set_point
-                  - service: climate.set_fan_mode
-                    data:
-                      fan_mode: medium
-                    target:
-                      entity_id: !input hvac_entity
-              - conditions:
-                  - condition: template
-                    value_template: >
-                      {% set temp = avg_internal_temp | float %}
-                      {% set target = internal_setpoint | float %}
-                      {{ 0.5 < temp - target <= 2.0 }}
-                sequence:
-                  - service: climate.set_temperature
-                    target:
-                      entity_id: !input hvac_entity
-                    data:
-                      hvac_mode: cool
-                      temperature: !input temp_set_point
-                  - service: climate.set_fan_mode
-                    data:
-                      fan_mode: low
-                    target:
-                      entity_id: !input hvac_entity
-              - conditions:
-                  - condition: template
-                    value_template: >
-                      {% set temp = avg_internal_temp | float %}
-                      {% set target = internal_setpoint | float %}
-                      {{ -0.5 < temp - target < 0.5 }}
-                sequence:
-                  - service: climate.set_temperature
-                    target:
-                      entity_id: !input hvac_entity
-                    data:
-                      hvac_mode: auto
-                      temperature: !input temp_set_point
-                  - service: climate.set_fan_mode
-                    data:
-                      fan_mode: low
-                    target:
-                      entity_id: !input hvac_entity
-          - choose:
-              - conditions:
-                  - condition: trigger
-                    id: temperature-is-stable
-                sequence:
-                  - choose:
-                      - conditions:
-                          - condition: template
-                            value_template: >
-                              {% set ext = states(external_temperature) | float(avg_internal_temp | float) %}
-                              {% set target = internal_setpoint | float %}
-                              {{ -0.5 < ext - target < 0.5 }}
-                        sequence:
-                          - service: climate.set_hvac_mode
-                            target:
-                              entity_id: !input hvac_entity
-                            data:
-                              hvac_mode: "off"
-                        default:
-                          - service: climate.set_temperature
-                            target:
-                              entity_id: !input hvac_entity
-                            data:
-                              hvac_mode: auto
-                              temperature: !input temp_set_point
-      - conditions:
-          - condition: state
-            entity_id: !input nighttime_auto_climate_enable
-            state: "on"
-          - condition: state
-            entity_id: sun.sun
-            state: 'below_horizon'
-        sequence:
-          - choose:
-              - conditions:
-                  - condition: state
-                    entity_id: !input occupation_sensor
-                    state: "off"
-                    for:
-                      hours: 0
-                      minutes: 15
-                      seconds: 0
-                sequence:
-                  - service: climate.set_hvac_mode
-                    target:
-                      entity_id: !input hvac_entity
-                    data:
-                      hvac_mode: "off"
-              - conditions:
-                  - condition: template
-                    value_template: >
-                      {% set temp = avg_internal_temp | float %}
-                      {% set target = internal_setpoint | float %}
-                      {{ -0.5 < temp - target < 0.5 }}
-                sequence:
-                  - service: climate.set_temperature
-                    target:
-                      entity_id: !input hvac_entity
-                    data:
-                      hvac_mode: auto
-                      temperature: !input temp_set_point
-                  - service: climate.set_fan_mode
-                    data:
-                      fan_mode: low
-                    target:
-                      entity_id: !input hvac_entity
-              - conditions:
-                  - condition: template
-                    value_template: >
-                      {% set temp = avg_internal_temp | float %}
-                      {% set target = internal_setpoint | float %}
-                      {{ temp - target > 4.0 or temp - target < -4.0 }}
-                sequence:
-                  - service: climate.set_temperature
-                    target:
-                      entity_id: !input hvac_entity
-                    data:
-                      hvac_mode: auto
-                      temperature: !input temp_set_point
-                  - service: climate.set_fan_mode
-                    data:
-                      fan_mode: high
-                    target:
-                      entity_id: !input hvac_entity
-              - conditions:
-                  - condition: template
-                    value_template: >
-                      {% set temp = avg_internal_temp | float %}
-                      {% set target = internal_setpoint | float %}
-                      {{ 2.0 < temp - target <= 4.0 or -4.0 < temp - target <= -2.0 }}
-                sequence:
-                  - service: climate.set_temperature
-                    target:
-                      entity_id: !input hvac_entity
-                    data:
-                      hvac_mode: auto
-                      temperature: !input temp_set_point
-                  - service: climate.set_fan_mode
-                    data:
-                      fan_mode: medium
-                    target:
-                      entity_id: !input hvac_entity
-              - conditions:
-                  - condition: template
-                    value_template: >
-                      {% set temp = avg_internal_temp | float %}
-                      {% set target = internal_setpoint | float %}
-                      {{ 0.5 < temp - target <= 2.0 or -2.0 < temp - target <= -0.5 }}
-                sequence:
-                  - service: climate.set_temperature
-                    target:
-                      entity_id: !input hvac_entity
-                    data:
-                      hvac_mode: auto
-                      temperature: !input temp_set_point
-                  - service: climate.set_fan_mode
-                    data:
-                      fan_mode: low
-                    target:
-                      entity_id: !input hvac_entity
-      - conditions:
-          - condition: state
-            entity_id: !input occupation_sensor
-            state: "off"
-        sequence:
-          - choose:
-              - conditions:
-                  - condition: template
-                    value_template: >
-                      {% set ext = states(external_temperature) | float(avg_internal_temp | float) %}
-                      {% set upper = internal_setpoint | float + 4 %}
-                      {% set lower = internal_setpoint | float - 4 %}
-                      {{ ext > upper or ext < lower }}
-                sequence:
-                  - action: climate.set_temperature
-                    metadata: {}
-                    target:
-                      entity_id: !input hvac_entity
-                    data:
-                      hvac_mode: auto
-                      temperature: >
-                        {% set upper = internal_setpoint | float + 4 %}
-                        {% set lower = internal_setpoint | float - 4 %}
-                        {% if avg_internal_temp > upper %}
-                          {{ upper }}
-                        {% elif avg_internal_temp < lower %}
-                          {{ lower }}
-                        {% else %}
-                          {{ avg_internal_temp }}
-                        {% endif %}
-                default:
-                  - action: climate.set_hvac_mode
-                    metadata: {}
-                    target:
-                      entity_id: !input hvac_entity
-                    data:
-                      hvac_mode: "off"
+            value_template: "{{ (outside_temp | float - setpoint | float) | abs <= 2 }}"
+        then:
+          - variables:
+              target_mode: fan_only
+              target_fan: low
+              target_temp: "{{ setpoint | float }}"
+        else:
+          - variables:
+              target_mode: off
+
+  # Presence
+  - if:
+      - condition: template
+        value_template: "{{ room_unoccupied }}"
+    then:
+      - variables:
+          target_mode: off
+
+  # Climate control
+  - if:
+      - condition: template
+        value_template: "{{ not any_window_open }}"
+      - condition: template
+        value_template: "{{ not room_unoccupied }}"
+    then:
+      - if:
+          - condition: template
+            value_template: "{{ is_day }}"
+        then:
+          - condition: template
+            value_template: "{{ daytime_auto_climate_enabled }}"
+          - variables:
+              target_temp: "{{ setpoint | float }}"
+              target_mode: >
+                {% set d = room_temp | float - setpoint | float %}
+                {% if d > 0.5 %}
+                  cool
+                {% elif d < -0.5 %}
+                  heat
+                {% else %}
+                  auto
+                {% endif %}
+              target_fan: >
+                {% set d = room_temp | float - setpoint | float %}
+                {% if d > 4.0 %}
+                  high
+                {% elif d >= 2.0 %}
+                  medium
+                {% elif d < -4.0 %} 
+                  high
+                {% elif d <= -2.0 %}
+                  medium
+                {% else %}
+                  low
+                {% endif %}
+        else:
+          - condition: template
+            value_template: "{{ nighttime_auto_climate_enabled }}"
+          - variables:
+              target_mode: >
+                {% set d = forecast_temp | float - night_setpoint | float %}
+                {% if d > 2.0 %}
+                  cool
+                {% elif d >= -2.0 %}
+                  auto
+                {% else %}
+                  heat
+                {% endif %}
+              target_fan: low
+              target_temp: >
+                {{ night_setpoint | float }}
+
+  - if:
+      - condition: not
+        conditions:
+          - condition: and
+            conditions:
+              - condition: state
+                entity_id: !input hvac_entity
+                state: "{{ target_mode }}"
+              - condition: state
+                entity_id: !input hvac_entity
+                attribute: temperature
+                state: "{{ target_temp }}"
+              - condition: state
+                entity_id: !input hvac_entity
+                attribute: fan_mode
+                state: "{{ target_fan }}"
+    then:
+      - action: climate.set_temperature
+        target:
+          entity_id: !input hvac_entity
+        data:
+          hvac_mode: "{{ target_mode }}"
+          temperature: "{{ target_temp }}"
+      - action: climate.set_fan_mode
+        target:
+          entity_id: !input hvac_entity
+        data:
+          fan_mode: "{{ target_fan }}"
+      - delay:
+          seconds: 5
