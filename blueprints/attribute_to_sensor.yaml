@@ -1,0 +1,242 @@
+blueprint:
+  name: Attribute to Sensor
+  description: >
+    Expose entity attributes as MQTT sensors via Home Assistant MQTT discovery.
+
+    Add one or more entity + attribute rows. Each attribute change publishes the
+    value to MQTT; discovery creates a sensor named **entity_id_attribute**
+    (dots in the entity id become underscores in MQTT topics).
+
+    **Prerequisites:** MQTT integration configured with discovery enabled. Use the
+    same broker address, port, username, and password in the blueprint and in the
+    integration (Settings → Devices & services → MQTT → Reconfigure).
+
+    **Attribute field:** enter the exact attribute key from Developer Tools → States
+    (the attribute selector cannot follow a per-row entity pick in blueprints).
+
+    **Removing a mapping:** deleting a row does not remove the old MQTT sensor —
+    publish an empty retained message to the previous discovery config topic.
+
+    **Duplicates:** identical entity + attribute rows are not validated; the last
+    publish wins.
+
+  domain: automation
+  author: rftafas
+  homeassistant:
+    min_version: "2024.6.0"
+
+  input:
+    main_config:
+      name: Mappings
+      description: Source entities and attributes to publish as MQTT sensors.
+      collapsed: false
+      input:
+        attribute_mappings:
+          name: Entity attribute mappings
+          description: >
+            Add at least one row. Each row watches one attribute on one entity.
+          default: []
+          selector:
+            object:
+              multiple: true
+              fields:
+                entity:
+                  label: Entity
+                  required: true
+                  selector:
+                    entity: {}
+                attribute:
+                  label: Attribute
+                  required: true
+                  selector:
+                    text: {}
+
+    mqtt_config:
+      name: MQTT
+      description: Broker connection, discovery prefix, state topic prefix, and retain.
+      collapsed: true
+      input:
+        mqtt_broker:
+          name: MQTT broker address
+          description: >
+            Broker hostname or IP (e.g. core-mosquitto, 192.168.1.10). Must match
+            the MQTT integration broker setting.
+          default: ""
+          selector:
+            text: {}
+
+        mqtt_port:
+          name: MQTT port
+          description: Broker port. Must match the MQTT integration (default 1883).
+          default: 1883
+          selector:
+            number:
+              min: 1
+              max: 65535
+              mode: box
+
+        mqtt_username:
+          name: MQTT username
+          description: >
+            Broker login used by Home Assistant's MQTT integration. Must match
+            Settings → Devices & services → MQTT → Reconfigure.
+          default: ""
+          selector:
+            text: {}
+
+        mqtt_password:
+          name: MQTT password
+          description: >
+            Broker password for the MQTT integration (masked in the UI). Must match
+            the MQTT integration configuration.
+          default: ""
+          selector:
+            text:
+              type: password
+
+        discovery_prefix:
+          name: Discovery prefix
+          description: >
+            MQTT discovery root (Home Assistant default is homeassistant).
+          default: homeassistant
+          selector:
+            text: {}
+
+        topic_prefix:
+          name: State topic prefix
+          description: >
+            State topics are **{prefix}/{object_id}/state** where object_id is
+            entity_id (dots → underscores) + underscore + attribute name.
+          default: attribute_to_sensor
+          selector:
+            text: {}
+
+        retain_state:
+          name: Retain state messages
+          description: When enabled, the broker keeps the last value on each state topic.
+          default: true
+          selector:
+            boolean: {}
+
+mode: parallel
+max_exceeded: silent
+
+variables:
+  attribute_mappings: !input attribute_mappings
+  mqtt_broker: !input mqtt_broker
+  mqtt_port: !input mqtt_port
+  mqtt_username: !input mqtt_username
+  mqtt_password: !input mqtt_password
+  discovery_prefix: !input discovery_prefix
+  topic_prefix: !input topic_prefix
+  retain_state: !input retain_state
+
+triggers:
+  - trigger: homeassistant
+    event: start
+    id: start
+
+  - trigger: event
+    event_type: state_changed
+    id: state_changed
+
+conditions:
+  - condition: template
+    value_template: |
+      {% if trigger.id == 'start' %}
+        true
+      {% else %}
+        {% set eid = trigger.event.data.entity_id %}
+        {% set old = trigger.event.data.old_state %}
+        {% set new = trigger.event.data.new_state %}
+        {% if old is none or new is none %}
+          false
+        {% else %}
+          {% set ns = namespace(match=false) %}
+          {% for m in attribute_mappings %}
+            {% if m.entity == eid %}
+              {% if old.attributes.get(m.attribute) != new.attributes.get(m.attribute) %}
+                {% set ns.match = true %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.match }}
+        {% endif %}
+      {% endif %}
+
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: start
+        sequence:
+          - repeat:
+              for_each: "{{ attribute_mappings }}"
+              sequence:
+                - variables:
+                    map_entity: "{{ repeat.item.entity }}"
+                    map_attribute: "{{ repeat.item.attribute }}"
+                    object_id: "{{ repeat.item.entity | replace('.', '_') }}_{{ repeat.item.attribute }}"
+                    sensor_name: "{{ repeat.item.entity }}_{{ repeat.item.attribute }}"
+                    state_topic: "{{ topic_prefix }}/{{ repeat.item.entity | replace('.', '_') }}_{{ repeat.item.attribute }}/state"
+                    unique_id: "attribute_to_sensor_{{ repeat.item.entity | replace('.', '_') }}_{{ repeat.item.attribute }}"
+                    discovery_topic: "{{ discovery_prefix }}/sensor/{{ repeat.item.entity | replace('.', '_') }}_{{ repeat.item.attribute }}/config"
+                    state_payload: >
+                      {% set val = state_attr(repeat.item.entity, repeat.item.attribute) %}
+                      {% if val is none %}
+                      {% elif val is mapping or (val is sequence and val is not string) %}
+                      {{ val | tojson }}
+                      {% else %}
+                      {{ val | string }}
+                      {% endif %}
+                - action: mqtt.publish
+                  data:
+                    topic: "{{ discovery_topic }}"
+                    retain: true
+                    payload: >-
+                      {{ dict(name=sensor_name, unique_id=unique_id, state_topic=state_topic, force_update=true) | tojson }}
+                - action: mqtt.publish
+                  data:
+                    topic: "{{ state_topic }}"
+                    retain: "{{ retain_state }}"
+                    payload: "{{ state_payload }}"
+
+    default:
+      - variables:
+          matched_mappings: >
+            {% set eid = trigger.event.data.entity_id %}
+            {% set old = trigger.event.data.old_state %}
+            {% set new = trigger.event.data.new_state %}
+            {% set ns = namespace(matched=[]) %}
+            {% for m in attribute_mappings %}
+              {% if m.entity == eid %}
+                {% if old.attributes.get(m.attribute) != new.attributes.get(m.attribute) %}
+                  {% set ns.matched = ns.matched + [m] %}
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.matched }}
+      - repeat:
+          for_each: "{{ matched_mappings }}"
+          sequence:
+            - variables:
+                map_entity: "{{ repeat.item.entity }}"
+                map_attribute: "{{ repeat.item.attribute }}"
+                object_id: "{{ repeat.item.entity | replace('.', '_') }}_{{ repeat.item.attribute }}"
+                sensor_name: "{{ repeat.item.entity }}_{{ repeat.item.attribute }}"
+                state_topic: "{{ topic_prefix }}/{{ repeat.item.entity | replace('.', '_') }}_{{ repeat.item.attribute }}/state"
+                unique_id: "attribute_to_sensor_{{ repeat.item.entity | replace('.', '_') }}_{{ repeat.item.attribute }}"
+                discovery_topic: "{{ discovery_prefix }}/sensor/{{ repeat.item.entity | replace('.', '_') }}_{{ repeat.item.attribute }}/config"
+                state_payload: >
+                  {% set val = state_attr(repeat.item.entity, repeat.item.attribute) %}
+                  {% if val is none %}
+                  {% elif val is mapping or (val is sequence and val is not string) %}
+                  {{ val | tojson }}
+                  {% else %}
+                  {{ val | string }}
+                  {% endif %}
+            - action: mqtt.publish
+              data:
+                topic: "{{ state_topic }}"
+                retain: "{{ retain_state }}"
+                payload: "{{ state_payload }}"
