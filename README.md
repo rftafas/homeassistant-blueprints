@@ -15,6 +15,7 @@ This repository contains Home Assistant blueprints for automations.
 | Soil Moisture Irrigation | Once-daily irrigation with soil waterfall, wind wait, and forecast gates | [![Add to my Home Assistant](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://raw.githubusercontent.com/rftafas/homeassistant-blueprints/main/blueprints/soil-moisture-irrigation.yaml) |
 | Motion Activated Lights | Multi-sensor motion lights with day/night enable helpers and no-motion timeout | [![Add to my Home Assistant](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://raw.githubusercontent.com/rftafas/homeassistant-blueprints/main/blueprints/motion-activated-lights.yaml) |
 | Local Weather MQTT Publisher | Aggregate sensors and forecasts; publish MQTT weather discovery and calculated rain metrics | [![Add to my Home Assistant](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://raw.githubusercontent.com/rftafas/homeassistant-blueprints/main/blueprints/mqtt-local-weather.yaml) |
+| Attribute to Sensor | Publish entity attributes over MQTT; discovery creates sensors named `entity_id_attribute` | [![Add to my Home Assistant](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https://raw.githubusercontent.com/rftafas/homeassistant-blueprints/main/blueprints/attribute_to_sensor.yaml) |
 
 
 ## Usage
@@ -207,6 +208,38 @@ Publishes a consolidated local weather JSON payload over MQTT with discovery mes
 **Integration with Soil Moisture Irrigation:** point **Next 24h rain probability** at the discovered precip sensor (e.g. `sensor.local_climate_precip_prob_24h`) or read `precipitation_probability_24h` from the JSON payload.
 
 **Note:** Home Assistant does not natively discover full `weather` entities over MQTT on all versions. The blueprint always publishes working **sensor** discovery entries for the calculated metrics. For a template weather entity, consume the MQTT JSON via a trigger-based template weather configuration outside this blueprint.
+
+### Attribute to Sensor
+
+Publishes selected entity **attributes** to MQTT and registers **sensor** entities via MQTT discovery. Use when an integration exposes useful data only as attributes (weather, climate, device diagnostics) and you want a dedicated `sensor.*` entity.
+
+**Prerequisites:**
+- Home Assistant **MQTT integration** configured (Settings → Devices & services → MQTT).
+- MQTT discovery enabled (default).
+- Broker **address**, **port**, **username**, and **password** in the blueprint must match the MQTT integration (Reconfigure if needed).
+
+**Configuration:**
+- **Entity attribute mappings** — add one or more rows: pick an entity, then enter the exact attribute key (from Developer Tools → States). Blueprints cannot chain the attribute picker to a per-row entity; use the text field.
+- **MQTT** — **MQTT broker address**, **MQTT port** (default `1883`), **MQTT username**, and **MQTT password**; optional `discovery_prefix` (default `homeassistant`), `topic_prefix` (default `attribute_to_sensor`), and **Retain state messages**.
+
+**Naming:** discovery `name` is `entity_id_attribute` (e.g. `sensor.outdoor_temp_native_value`). MQTT `object_id` replaces dots with underscores: `sensor_outdoor_temp_native_value`.
+
+**Triggers:**
+1. **Home Assistant start** — publish discovery (retained) and current values for every mapping.
+2. **`state_changed` events** — when a mapped attribute value changes on a mapped entity, publish the new value only for matching rows.
+
+**MQTT topics** (defaults, per mapping):
+
+| Purpose | Topic |
+| --- | --- |
+| Discovery | `homeassistant/sensor/{object_id}/config` |
+| State | `attribute_to_sensor/{object_id}/state` |
+
+Example: entity `sensor.outdoor_temp`, attribute `native_value` → state topic `attribute_to_sensor/sensor_outdoor_temp_native_value/state`, `unique_id` `attribute_to_sensor_sensor_outdoor_temp_native_value`.
+
+**Removing a sensor:** delete the mapping row and re-save does **not** remove the MQTT entity. Publish an **empty retained** message to the old discovery config topic (e.g. `homeassistant/sensor/sensor_outdoor_temp_native_value/config`).
+
+**Mode:** `parallel` — concurrent attribute updates publish independently.
 
 ---
 
