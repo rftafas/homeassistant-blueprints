@@ -12,7 +12,7 @@ blueprint:
     - **Triggers:** room and outdoor temperature, boundaries, presence/windows, HVAC changes, optional manual re-evaluation helper
 
 
-    - **Optional:** day/night enable helpers, manual lock after user HVAC changes while occupied (presence YES)
+    - **Optional:** day/night enable helpers, manual lock after user HVAC changes (see Presence section)
   domain: automation
   author: rftafas
   homeassistant:
@@ -28,6 +28,7 @@ blueprint:
           name: HVAC Entity
           description: >
             One or more climate entities; each run applies the same mode, target temperature, and fan mode.
+          default: []
           selector:
             entity:
               multiple: true
@@ -62,7 +63,7 @@ blueprint:
 
     temperature_config:
       name: Temperature sensors
-      description: Indoor and outdoor sources for day bands and ventilation.
+      description: Indoor and outdoor sources, ventilation band, and forecast.
       collapsed: true
       input:
         room_temperature_sensors:
@@ -74,6 +75,7 @@ blueprint:
 
 
             - **Required:** one or more entities
+          default: []
           selector:
             entity:
               multiple: true
@@ -90,12 +92,43 @@ blueprint:
 
 
             - **Required:** one or more entities
+          default: []
           selector:
             entity:
               multiple: true
               filter:
                 - domain: sensor
                 - domain: number
+
+        forecast:
+          name: Forecast
+          description: >
+            Compared to the night setpoint for nighttime cool / auto / heat mode.
+
+            - **average:** HVAC region's average temperature (default)
+
+
+            - **forecast:** temperature sensor with the average forecast for the next 8 hours (e.g. template sensor from `scratch/forecast-temperature-average-sensor.yaml` with `forecast_hours: 8`)
+          default:
+            active_choice: average
+            average: 24
+          selector:
+            choose:
+              choices:
+                average:
+                  selector:
+                    number:
+                      min: -30
+                      max: 50
+                      unit_of_measurement: °C
+                      mode: box
+                forecast:
+                  selector:
+                    entity:
+                      filter:
+                        - domain: sensor
+                          device_class: temperature
+                        - domain: number
 
     presence_config:
       name: Presence
@@ -111,7 +144,7 @@ blueprint:
             - **NO:** no presence-based routing
 
 
-            - **YES:** presence or occupancy entity, unoccupied duration, optional manual lock (default on — user HVAC change while occupied waits up to 4 h or until unoccupied before auto climate resumes)
+            - **YES:** presence or occupancy entity and unoccupied duration before HVAC off
           default:
             active_choice: "NO"
             YES:
@@ -119,7 +152,6 @@ blueprint:
                 hours: 0
                 minutes: 10
                 seconds: 0
-              manual_lock: true
           selector:
             choose:
               choices:
@@ -146,10 +178,21 @@ blueprint:
                           label: Unoccupied duration before HVAC off
                           selector:
                             duration: {}
-                        manual_lock:
-                          label: Manual lock
-                          selector:
-                            boolean: {}
+
+        manual_lock:
+          name: Manual lock
+          description: >
+            When ON, a user change to HVAC mode, target temperature, or fan pauses
+            automatic climate on that trigger.
+
+            - **With presence sensor:** waits up to 4 hours or until the room is
+              unoccupied (whichever comes first).
+
+
+            - **Without presence sensor:** waits the full 4 hours (no early exit).
+          default: true
+          selector:
+            boolean: {}
 
     windows_config:
       name: Windows and doors
@@ -167,14 +210,11 @@ blueprint:
             Sensor convention: **off** = closed, **on** = open.
 
             - **NO:** no window-based routing
-            - **YES:** pick opening sensors
+
+
+            - **YES:** pick opening sensors (debounce/delay on the sensor if needed)
           default:
             active_choice: "NO"
-            YES:
-              window_open_duration:
-                hours: 0
-                minutes: 5
-                seconds: 0
           selector:
             choose:
               choices:
@@ -194,10 +234,6 @@ blueprint:
                               multiple: true
                               filter:
                                 domain: binary_sensor
-                        window_open_duration:
-                          label: Open duration before ventilation action
-                          selector:
-                            duration: {}
 
     day_config:
       name: Day
@@ -288,7 +324,7 @@ blueprint:
 
     night_config:
       name: Night
-      description: Nighttime enable, boundary, setpoint, and forecast.
+      description: Nighttime enable, boundary, and setpoint.
       collapsed: true
       input:
         nighttime_auto_climate_enable:
@@ -384,17 +420,6 @@ blueprint:
                           selector:
                             time: {}
 
-        forecast_temperature:
-          name: Forecast temperature
-          description: >
-            Single entity for nighttime mode selection (cool / auto / heat vs night setpoint). Use a template sensor, forecast entity, or outdoor temperature as needed.
-          selector:
-            entity:
-              filter:
-                - domain: sensor
-                  device_class: temperature
-                - domain: number
-
 mode: single
 max_exceeded: silent
 
@@ -415,7 +440,7 @@ variables:
   hvac_entity: !input hvac_entity
   room_temperature_sensors: !input room_temperature_sensors
   outside_temperature_sensors: !input outside_temperature_sensors
-  forecast_temperature: !input forecast_temperature
+  forecast: !input forecast
   occupation_sensor: !input occupation_sensor
   windows_sensors: !input windows_sensors
   day_set_point: !input day_set_point
@@ -424,18 +449,19 @@ variables:
   night_set_point: !input night_set_point
   daytime_auto_climate_enable: !input daytime_auto_climate_enable
   nighttime_auto_climate_enable: !input nighttime_auto_climate_enable
+  manual_lock: !input manual_lock
   # Helpers and variables
   daytime_auto_climate_enabled: >
     {% if daytime_auto_climate_enable.active_choice == 'YES' %}
       {{ is_state(daytime_auto_climate_enable.YES, 'on') }}
     {% else %}
-      true
+      {{ 'true' }}
     {% endif %}
   nighttime_auto_climate_enabled: >
     {% if nighttime_auto_climate_enable.active_choice == 'YES' %}
       {{ is_state(nighttime_auto_climate_enable.YES, 'on') }}
     {% else %}
-      true
+      {{ 'true' }}
     {% endif %}
   setpoint: >
     {% if day_set_point.active_choice == 'fixed' %}
@@ -466,11 +492,15 @@ variables:
     {% endfor %}
     {{ (ns.values | sum) / (ns.values | length) if ns.values | length > 0 else 0 }}
   forecast_temp: >
-    {% set v = states(forecast_temperature) %}
-    {% if v in ['unavailable', 'unknown', 'none', ''] %}
-      0
+    {% if forecast.active_choice == 'average' %}
+      {{ forecast.average | float(24) }}
     {% else %}
-      {{ v | float(0) }}
+      {% set v = states(forecast.forecast) %}
+      {% if v in ['unavailable', 'unknown', 'none', ''] %}
+        {{ 0 }}
+      {% else %}
+        {{ v | float(0) }}
+      {% endif %}
     {% endif %}
   any_window_open: >
     {% if windows_sensors.active_choice == 'YES' %}
@@ -527,7 +557,7 @@ triggers:
       {% if day_set_point.active_choice == 'external' %}
         {{ states(day_set_point.external) }}
       {% else %}
-        false
+        {{ 'false' }}
       {% endif %}
     id: setpoint_change
 
@@ -536,16 +566,25 @@ triggers:
       {% if night_set_point.active_choice == 'external' %}
         {{ states(night_set_point.external) }}
       {% else %}
-        false
+        {{ 'false' }}
       {% endif %}
     id: setpoint_change
+
+  - trigger: template
+    value_template: |
+      {% if forecast.active_choice == 'forecast' %}
+        {{ states(forecast.forecast) }}
+      {% else %}
+        {{ 'false' }}
+      {% endif %}
+    id: forecast_temp_change
 
   - trigger: template
     value_template: |
       {% if occupation_sensor.active_choice == 'YES' %}
         {{ states(occupation_sensor.YES.entity) }}
       {% else %}
-        false
+        {{ 'false' }}
       {% endif %}
     id: presence_change
 
@@ -601,7 +640,7 @@ triggers:
       {% if manual_trigger.active_choice == 'YES' %}
         {{ is_state(manual_trigger.YES, 'on') }}
       {% else %}
-        false
+        {{ 'false' }}
       {% endif %}
     id: manual
 
@@ -610,7 +649,7 @@ triggers:
       {% if daytime_auto_climate_enable.active_choice == 'YES' %}
         {{ is_state(daytime_auto_climate_enable.YES, 'on') }}
       {% else %}
-        false
+        {{ 'false' }}
       {% endif %}
     id: day_enable_on
 
@@ -619,7 +658,7 @@ triggers:
       {% if nighttime_auto_climate_enable.active_choice == 'YES' %}
         {{ is_state(nighttime_auto_climate_enable.YES, 'on') }}
       {% else %}
-        false
+        {{ 'false' }}
       {% endif %}
     id: night_enable_on
 
@@ -634,24 +673,34 @@ conditions:
 
 actions:
   - variables:
-      target_mode: off
-      target_fan: low
+      target_mode: "off"
+      target_fan: "low"
       target_temp: 24
 
   # Manual lock
   - if:
-      conditions:
-        - condition: trigger
-          id: hvac_config
-        - condition: template
-          value_template: "{{ not room_unoccupied }}"
+      - condition: template
+        value_template: >
+          {% if manual_lock and trigger.id == 'hvac_config' and not room_unoccupied %}
+            {{ 'true' }}
+          {% else %}
+            {{ 'false' }}
+          {% endif %}
     then:
-      - wait_for_trigger:
-          - trigger: template
-            value_template: "{{ room_unoccupied }}"
-        timeout:
-          hours: 4
-        continue_on_timeout: true
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ occupation_sensor.active_choice == 'YES' }}"
+            sequence:
+              - wait_for_trigger:
+                  - trigger: template
+                    value_template: "{{ room_unoccupied }}"
+                timeout:
+                  hours: 4
+                continue_on_timeout: true
+        default:
+          - delay:
+              hours: 4
 
   # Window
   - if:
@@ -663,12 +712,12 @@ actions:
             value_template: "{{ (outside_temp | float - setpoint | float) | abs <= 2 }}"
         then:
           - variables:
-              target_mode: fan_only
-              target_fan: low
+              target_mode: "fan_only"
+              target_fan: "low"
               target_temp: "{{ setpoint | float }}"
         else:
           - variables:
-              target_mode: off
+              target_mode: "off"
 
   # Presence
   - if:
@@ -676,7 +725,7 @@ actions:
         value_template: "{{ room_unoccupied }}"
     then:
       - variables:
-          target_mode: off
+          target_mode: "off"
 
   # Climate control
   - if:
@@ -695,40 +744,40 @@ actions:
               target_temp: "{{ setpoint | float }}"
               target_mode: >
                 {% set d = room_temp | float - setpoint | float %}
-                {% if d > 0.5 %}
-                  cool
-                {% elif d < -0.5 %}
-                  heat
-                {% else %}
-                  auto
-                {% endif %}
+                {%- if d > 0.5 -%}
+                  {{ 'cool' }}
+                {%- elif d < -0.5 -%}
+                  {{ 'heat' }}
+                {%- else -%}
+                  {{ 'auto' }}
+                {%- endif -%}
               target_fan: >
                 {% set d = room_temp | float - setpoint | float %}
-                {% if d > 4.0 %}
-                  high
-                {% elif d >= 2.0 %}
-                  medium
-                {% elif d < -4.0 %} 
-                  high
-                {% elif d <= -2.0 %}
-                  medium
-                {% else %}
-                  low
-                {% endif %}
+                {%- if d > 4.0 -%}
+                  {{ 'high' }}
+                {%- elif d >= 2.0 -%}
+                  {{ 'medium' }}
+                {%- elif d < -4.0 -%}
+                  {{ 'high' }}
+                {%- elif d <= -2.0 -%}
+                  {{ 'medium' }}
+                {%- else -%}
+                  {{ 'low' }}
+                {%- endif -%}
         else:
           - condition: template
             value_template: "{{ nighttime_auto_climate_enabled }}"
           - variables:
               target_mode: >
                 {% set d = forecast_temp | float - night_setpoint | float %}
-                {% if d > 2.0 %}
-                  cool
-                {% elif d >= -2.0 %}
-                  auto
-                {% else %}
-                  heat
-                {% endif %}
-              target_fan: low
+                {%- if d > 2.0 -%}
+                  {{ 'cool' }}
+                {%- elif d >= -2.0 -%}
+                  {{ 'auto' }}
+                {%- else -%}
+                  {{ 'heat' }}
+                {%- endif -%}
+              target_fan: "low"
               target_temp: >
                 {{ night_setpoint | float }}
 
