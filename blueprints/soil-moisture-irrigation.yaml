@@ -12,7 +12,7 @@ blueprint:
     An optional wind gate waits for calmer conditions before irrigating.
 
     Assumptions:
-    - One irrigation zone; all selected valves and pumps act together.
+    - One irrigation zone; valves and pumps turn on and off together.
     - One evaluation per trigger event.
 
   domain: automation
@@ -187,13 +187,14 @@ blueprint:
           name: Max wind speed
           description: >
             When wind speed from the weather entity is at or above this value
-            (m/s), wait for calmer conditions before irrigating.
-          default: 8
+            (km/h), wait for calmer conditions before irrigating. Matches
+            Home Assistant weather entity wind_speed (metric default).
+          default: 29
           selector:
             number:
               min: 0
-              max: 50
-              unit_of_measurement: m/s
+              max: 180
+              unit_of_measurement: km/h
               mode: box
 
         wind_wait_timeout:
@@ -225,7 +226,7 @@ blueprint:
                     - switch
                     - valve
 
-        pump_entities:
+        pump_entities_input:
           name: Pumps (optional)
           description: Optional irrigation pumps (switch or valve entities).
           default: []
@@ -266,7 +267,9 @@ variables:
   weather_entity: !input weather_entity
   forecast_dry_days: !input forecast_dry_days
   wind_speed_threshold: !input wind_speed_threshold
-  pump_entities: !input pump_entities
+  valve_entities: !input valve_entities
+  pump_entities: !input pump_entities_input
+  actuator_entity_ids: "{{ valve_entities + pump_entities }}"
   notify_targets: !input notify_targets
   rainy_set:
     - rainy
@@ -370,30 +373,18 @@ action:
         continue_on_timeout: false
         enabled: !input enable_wind_wait
 
-  # ── Irrigate ──
+  # ── Irrigate (valves + pumps together) ──
   - action: homeassistant.turn_on
     target:
-      entity_id: !input valve_entities
-  - if:
-      - condition: template
-        value_template: "{{ pump_entities | count > 0 }}"
-    then:
-      - delay:
-          seconds: 5
-      - action: homeassistant.turn_on
-        target:
-          entity_id: "{{ pump_entities }}"
+      entity_id: "{{ actuator_entity_ids | join(',') }}"
+
+  # ── Irrigation duration ──
   - delay: !input irrigation_duration
-  - if:
-      - condition: template
-        value_template: "{{ pump_entities | count > 0 }}"
-    then:
-      - action: homeassistant.turn_off
-        target:
-          entity_id: "{{ pump_entities }}"
+
+  # ── Shut down (valves + pumps together) ──
   - action: homeassistant.turn_off
     target:
-      entity_id: !input valve_entities
+      entity_id: "{{ actuator_entity_ids | join(',') }}"
 
   # ── Log ──
   - action: system_log.write
@@ -408,7 +399,7 @@ action:
     then:
       - action: notify.send_message
         target:
-          entity_id: "{{ notify_targets }}"
+          entity_id: "{{ notify_targets | join(',') }}"
         data:
           title: Soil Moisture Irrigation
           message: >-
