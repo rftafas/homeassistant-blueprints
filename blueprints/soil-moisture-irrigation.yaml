@@ -1,18 +1,20 @@
 blueprint:
   name: Soil Moisture Irrigation
   description: >
-    Once-daily irrigation with an optional manual trigger. At the configured
-    time each day the automation evaluates soil and weather gates in sequence;
-    if every gate passes it irrigates. When the optional manual trigger turns
-    ON, irrigation runs immediately and skips all gates.
+    Simple irrigation automation for a single zone. Assumptions:
 
-    Soil signal: pick exactly one check (moisture, accumulated rain in mm,
-    accumulated rain duration, or an every-X-days fallback). Weather gates skip
-    scheduled runs if it is raining now or if any checked forecast day is rainy.
-    An optional wind gate waits for calmer conditions before irrigating.
+    - One irrigation trigger per day.
 
-    Assumptions:
-    - One irrigation zone; valves and pumps turn on and off together.
+
+    - One irrigation zone; valves always run; optional pumps when enabled (YES).
+
+
+    - Valves use valve.open_valve / valve.close_valve (valve domain only).
+
+
+    - Stagger timing between valves and pumps: use helpers or a separate automation.
+
+
     - One evaluation per trigger event.
 
   domain: automation
@@ -36,8 +38,13 @@ blueprint:
         manual_trigger:
           name: Manual trigger (optional)
           description: >
-            NO: scheduled runs only. YES: pick a binary_sensor or input_boolean;
-            turning it ON runs irrigation immediately, skipping all checks.
+            Choose whether a manual trigger can start irrigation immediately.
+
+            - **NO:** scheduled runs only
+
+
+            - **YES:** pick a binary_sensor or input_boolean; turning it ON runs
+              irrigation immediately, skipping all checks
           default:
             active_choice: "NO"
           selector:
@@ -67,14 +74,26 @@ blueprint:
 
     soil_config:
       name: Soil
-      description: Pick one soil signal and its settings.
+      description: >
+        Pick one soil signal and its settings. Only the chosen option's fields
+        are used; the others can be left empty.
       collapsed: true
       input:
         soil_signal:
           name: Soil signal
           description: >
-            Select how the condition of the soil is checked. Only the chosen
-            option's fields are used; the others can be left empty.
+            How the soil gate decides whether irrigation is needed.
+
+            - **moisture:** irrigate when the moisture sensor is below threshold
+
+
+            - **rain_mm:** skip when accumulated rain (mm) is at or above threshold
+
+
+            - **rain_hours:** skip when accumulated rain duration is at or above threshold
+
+
+            - **timeout:** irrigate every X days (fallback when no sensor is used)
           default:
             active_choice: timeout
             timeout: 3
@@ -163,7 +182,17 @@ blueprint:
           description: >
             How many forecast days to inspect, starting from today. If any
             checked day has a rainy condition, irrigation is skipped.
-            0 = today only. 1 = today and tomorrow. 2 = today + next 2 days.
+
+            - **0:** today only
+
+
+            - **1:** today and tomorrow
+
+
+            - **2:** today and the next two days
+
+
+            - **7:** whole week
           default: 0
           selector:
             number:
@@ -176,9 +205,13 @@ blueprint:
         enable_wind_wait:
           name: Enable wind wait
           description: >
-            When ON, pause before irrigating if wind is at or above the
-            threshold, up to the configured wait timeout. When OFF, start
-            immediately.
+            Whether to wait for calmer wind before irrigating.
+
+            - **ON:** pause if wind is at or above the threshold, up to the wait
+              timeout; skip irrigation if still too windy afterward
+
+
+            - **OFF:** start irrigation immediately (wind gate disabled)
           default: true
           selector:
             boolean: {}
@@ -217,26 +250,38 @@ blueprint:
         valve_entities:
           name: Valves
           description: >
-            At least one irrigation valve (switch or valve entity) is required.
+            At least one irrigation valve (valve domain) is required.
           selector:
             entity:
               multiple: true
-              filter:
-                - domain:
-                    - switch
-                    - valve
+              domain: valve
 
-        pump_entities_input:
+        pump_config:
           name: Pumps (optional)
-          description: Optional irrigation pumps (switch or valve entities).
-          default: []
+          description: >
+            Optional pump switches (switch domain) to turn on and off with each
+            irrigation run.
+
+            - **NO:** irrigation valves only
+
+
+            - **YES:** select pump switches to turn on and off with each run
+          default:
+            active_choice: "NO"
           selector:
-            entity:
-              multiple: true
-              filter:
-                - domain:
-                    - switch
-                    - valve
+            choose:
+              choices:
+                "NO":
+                  selector:
+                    constant:
+                      value: false
+                      label: No pump
+                "YES":
+                  selector:
+                    entity:
+                      multiple: true
+                      filter:
+                        - domain: switch
 
     notification_config:
       name: Notification
@@ -246,8 +291,7 @@ blueprint:
         notify_targets:
           name: Notification targets (optional)
           description: >
-            Optional companion-app notify entities (notify.mobile_app_*). Leave
-            empty to disable notifications.
+            Optional companion-app notify entities (notify.mobile_app_*). Leave empty to disable notifications.
           default: []
           selector:
             entity:
@@ -267,9 +311,7 @@ variables:
   weather_entity: !input weather_entity
   forecast_dry_days: !input forecast_dry_days
   wind_speed_threshold: !input wind_speed_threshold
-  valve_entities: !input valve_entities
-  pump_entities: !input pump_entities_input
-  actuator_entity_ids: "{{ valve_entities + pump_entities }}"
+  pump_config: !input pump_config
   notify_targets: !input notify_targets
   rainy_set:
     - rainy
@@ -373,18 +415,36 @@ action:
         continue_on_timeout: false
         enabled: !input enable_wind_wait
 
-  # ── Irrigate (valves + pumps together) ──
-  - action: homeassistant.turn_on
+  # ── Open valves ──
+  - action: valve.open_valve
     target:
-      entity_id: "{{ actuator_entity_ids | join(',') }}"
+      entity_id: !input valve_entities
+
+  # ── Turn on pumps when configured (YES) ──
+  - if:
+      - condition: template
+        value_template: "{{ pump_config.active_choice == 'YES' }}"
+    then:
+      - action: switch.turn_on
+        target:
+          entity_id: "{{ pump_config.YES | join(',') }}"
 
   # ── Irrigation duration ──
   - delay: !input irrigation_duration
 
-  # ── Shut down (valves + pumps together) ──
-  - action: homeassistant.turn_off
+  # ── Turn off pumps when configured (YES) ──
+  - if:
+      - condition: template
+        value_template: "{{ pump_config.active_choice == 'YES' }}"
+    then:
+      - action: switch.turn_off
+        target:
+          entity_id: "{{ pump_config.YES | join(',') }}"
+
+  # ── Close valves ──
+  - action: valve.close_valve
     target:
-      entity_id: "{{ actuator_entity_ids | join(',') }}"
+      entity_id: !input valve_entities
 
   # ── Log ──
   - action: system_log.write
