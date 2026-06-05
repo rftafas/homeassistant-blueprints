@@ -111,7 +111,7 @@ blueprint:
             - **NO:** no presence-based routing
 
 
-            - **YES:** presence entity, unoccupied duration, optional manual lock (default on — user HVAC change while occupied waits up to 4 h or until unoccupied before auto climate resumes)
+            - **YES:** presence or occupancy entity, unoccupied duration, optional manual lock (default on — user HVAC change while occupied waits up to 4 h or until unoccupied before auto climate resumes)
           default:
             active_choice: "NO"
             YES:
@@ -133,12 +133,14 @@ blueprint:
                     object:
                       fields:
                         entity:
-                          label: Presence entity
+                          label: Presence / occupancy entity
                           selector:
                             entity:
                               filter:
                                 - domain: binary_sensor
-                                  device_class: presence
+                                  device_class:
+                                    - presence
+                                    - occupancy
                                 - domain: input_boolean
                         presence_unoccupied_duration:
                           label: Unoccupied duration before HVAC off
