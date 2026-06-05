@@ -120,7 +120,7 @@ action:
 
 ### Soil Moisture Irrigation
 
-Runs **once per day** at the configured activation time. Each run evaluates conditions, optionally waits for wind to drop, then irrigates or skips. At least one **valve** is required; optional **pumps** turn on and off together with the valves.
+Runs **once per day** at the configured activation time. Each run evaluates conditions, optionally waits for wind to drop, then irrigates or skips. At least one **valve** entity is required (`valve.open_valve` / `valve.close_valve`). **Pumps** are optional (**NO** / **YES** choose); when YES, pump switches turn on and off with each run.
 
 **Override:** optional binary (`input_boolean` or `binary_sensor`). When ON, irrigate immediately and skip all soil, weather, and forecast checks.
 
