@@ -194,7 +194,13 @@ actions:
                     topic: "{{ discovery_topic }}"
                     retain: true
                     payload: >-
-                      {{ dict(name=sensor_name, unique_id=unique_id, state_topic=state_topic, force_update=true) | tojson }}
+                      {{ dict(
+                        name=sensor_name,
+                        unique_id=unique_id,
+                        state_topic=state_topic,
+                        force_update=true,
+                        origin=dict(name='Attribute to Sensor blueprint')
+                      ) | tojson }}
                 - action: mqtt.publish
                   data:
                     topic: "{{ state_topic }}"
