@@ -120,7 +120,7 @@ action:
 
 ### Soil Moisture Irrigation
 
-Runs **once per day** at the configured activation time. Each run evaluates conditions, optionally waits for wind to drop, then irrigates or skips. At least one **valve** is required; pumps are optional.
+Runs **once per day** at the configured activation time. Each run evaluates conditions, optionally waits for wind to drop, then irrigates or skips. At least one **valve** is required; optional **pumps** turn on and off together with the valves.
 
 **Override:** optional binary (`input_boolean` or `binary_sensor`). When ON, irrigate immediately and skip all soil, weather, and forecast checks.
 
@@ -138,7 +138,7 @@ If no configured signal is readable, irrigation is skipped.
 
 **Present weather:** when a weather entity is configured, skip if the current condition is rainy. Missing or invalid data is ignored.
 
-**Wind wait:** when wind speed from the weather entity is at or above the threshold, poll every 5 minutes until it drops or the wait timeout expires. Still too windy afterward → skip.
+**Wind wait:** when wind speed from the weather entity is at or above the threshold (km/h, matching HA weather `wind_speed`), poll every 5 minutes until it drops or the wait timeout expires. Still too windy afterward → skip. Default threshold is **29 km/h** (~8 m/s).
 
 **Forecast soft fallback** (after soil passes; if all methods unavailable, soil alone decides):
 
