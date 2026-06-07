@@ -52,13 +52,13 @@ Reactive climate control with **`mode: single`** (triggers during a run are igno
 
 **Variables:** `room_temp`, `outside_temp`, `forecast_temp`, `comfort_delta`, `any_window_open`, `room_unoccupied`, `outside_in_ventilation_band`, `daytime_auto_climate_enabled`, `nighttime_auto_climate_enabled`.
 
-**Day vs night:** **`day_boundary`** and **`night_boundary`** are configured separately (each **sun** or **fixed**). **`is_day`** requires both: day side passed (above horizon or `now ≥ day_time`) and night side not ended (above horizon or `now < night_time`). Example: day **sun** + night **fixed** 22:00 → daytime from sunrise until sunset and before 22:00. Night mode uses **`forecast_temp`** from **`forecast`** (**average** or **forecast** entity). Action order: manual lock → window → presence → climate control (sets **`target_*`**) → single idempotent apply. Climate gated by **`not any_window_open`** and presence **on** when configured.
+**Day vs night:** **`day_boundary`** and **`night_boundary`** are configured separately (each **sun** or **fixed**). **`is_day`** requires both: day side passed (above horizon or `now ≥ day_time`) and night side not ended (above horizon or `now < night_time`). Example: day **sun** + night **fixed** 22:00 → daytime from sunrise until sunset and before 22:00. Night mode uses **`forecast_temp`** from **`forecast`** (**average** or **forecast** entity). Action order: init → manual-lock **`choose`** ( **`hvac_config`** only) → routing **`choose`** (presence → window → **default** climate) → single idempotent apply.
 
 **Day/night enable:** **NO** (default) = always on; **YES** = helper + enable gate on day/night branches. **YES** accepts **`input_boolean`** or **`binary_sensor`** for day and night.
 
 **Night setpoint:** **`night_set_point`** choose — **`day_copy`** (default, uses day setpoint), **`fixed`** (slider), or **`external`** (temperature **`sensor`**, **`number`**, or **`input_number`**).
 
-**Manual lock:** sibling boolean under **`presence_config`** (default on; gates the manual-lock **`if`** via a template condition on **`manual_lock`**, **`trigger.id == 'hvac_config'`**, and **`not room_unoccupied`**). When on and occupied, a user **HVAC mode / temp / fan** change pauses automatic climate: **with presence YES** — wait up to **4 hours** or until unoccupied; **without presence** — full **4 hours** (no early exit). Echo from this automation’s own `climate.set_*` is suppressed by **`mode: single`** plus the **5 s delay** after commanded services.
+**Manual lock:** sibling boolean under **`presence_config`** (default on; first option in the manual-lock **`choose`** on **`manual_lock`**, **`trigger.id == 'hvac_config'`**, and **`not room_unoccupied`**). When on and occupied, a user **HVAC mode / temp / fan** change pauses automatic climate: **with presence YES** — wait up to **4 hours** or until unoccupied; **without presence** — full **4 hours** (no early exit). When manual lock matches, wait runs first; routing **`choose`** always runs next (wait-then-route). Echo from this automation’s own `climate.set_*` is suppressed by **`mode: single`** plus the **5 s delay** after commanded services.
 
 **HVAC availability:** Top-level [automation `conditions:`](https://www.home-assistant.io/docs/automation/condition/) skip the run if **any** configured climate entity is `unavailable` or `unknown` (all must be reachable before actions execute).
 
@@ -82,9 +82,9 @@ action:
       entity_id: input_boolean.climate_recheck
 ```
 
-**Windows/doors (optional):** **YES** — **`any_window_open`** (any sensor `on`) → vent band or **off** via **`target_*`**; climate configure skipped while open.
+**Windows/doors (optional):** **YES** — **`any_window_open`** (second routing **`choose`** option) → vent band or **off** via **`target_*`**; climate default skipped while open (or when unoccupied — presence option wins first).
 
-**HVAC apply:** Single idempotent block at end — **`target_mode == 'off'`** → `climate.set_hvac_mode`; else `climate.set_temperature` + `climate.set_fan_mode`. **5 s delay** only after a service runs.
+**HVAC apply:** Single idempotent block at end — `climate.set_temperature` (+ `climate.set_fan_mode` only when **`target_mode != 'off'`**). **5 s delay** only after a service runs.
 
 **Breaking changes (re-save required):**
 
