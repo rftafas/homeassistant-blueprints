@@ -725,21 +725,23 @@ actions:
 
   # Apply    
   - if:
-      - condition: not
-        conditions:
-          - condition: and
-            conditions:
-              - condition: state
-                entity_id: !input hvac_entity
-                state: "{{ target_mode }}"
-              - condition: state
-                entity_id: !input hvac_entity
-                attribute: temperature
-                state: "{{ target_temp }}"
-              - condition: state
-                entity_id: !input hvac_entity
-                attribute: fan_mode
-                state: "{{ target_fan }}"
+      - condition: template
+        value_template: >
+          {% set ns = namespace(result=false) %}
+          {% set hvac_list = hvac_entity %}
+          {% for hvac_unit in hvac_entity %}
+            {% if states(hvac_unit) != target_mode %}
+              {% set ns.result = true %}
+            {% elif states(hvac_unit) != "off" %}
+              {% if state_attr(hvac_unit, 'fan_mode') != target_fan %}
+                {% set ns.result = true %}
+              {% endif %}
+              {% if state_attr(hvac_unit, 'temperature') != target_temp %}
+                {% set ns.result = true %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.result }}
     then:
       - action: climate.set_temperature
         target:
