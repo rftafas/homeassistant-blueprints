@@ -6,7 +6,7 @@ blueprint:
     - **Day:** setpoint-driven cool/heat/auto and fan bands
 
 
-    - **Night:** forecast vs night setpoint (cool / auto / heat)
+    - **Night:** setpoint-driven cool/heat/auto and fan bands
 
 
     - **Triggers:** room and outdoor temperature, presence/windows, HVAC changes, optional manual re-evaluation helper
@@ -99,36 +99,6 @@ blueprint:
               filter:
                 - domain: sensor
                 - domain: number
-
-        forecast:
-          name: Forecast
-          description: >
-            Compared to the night setpoint for nighttime cool / auto / heat mode.
-
-            - **average:** HVAC region's average temperature (default)
-
-
-            - **forecast:** temperature sensor with the average forecast for the next 8 hours (e.g. template sensor from `scratch/forecast-temperature-average-sensor.yaml` with `forecast_hours: 8`)
-          default:
-            active_choice: "average"
-            average: 24
-          selector:
-            choose:
-              choices:
-                average:
-                  selector:
-                    number:
-                      min: -30
-                      max: 50
-                      unit_of_measurement: °C
-                      mode: box
-                forecast:
-                  selector:
-                    entity:
-                      filter:
-                        - domain: sensor
-                          device_class: temperature
-                        - domain: number
 
     presence_config:
       name: Presence
@@ -437,7 +407,6 @@ variables:
   hvac_entity: !input hvac_entity
   room_temperature_sensors: !input room_temperature_sensors
   outside_temperature_sensors: !input outside_temperature_sensors
-  forecast: !input forecast
   occupation_sensor: !input occupation_sensor
   windows_sensors: !input windows_sensors
   day_set_point: !input day_set_point
@@ -488,17 +457,6 @@ variables:
       {% endif %}
     {% endfor %}
     {{ (ns.values | sum) / (ns.values | length) if ns.values | length > 0 else 0 }}
-  forecast_temp: >
-    {% if forecast.active_choice == 'average' %}
-      {{ forecast.average | float(24) }}
-    {% else %}
-      {% set v = states(forecast.forecast) %}
-      {% if v in ['unavailable', 'unknown', 'none', ''] %}
-        {{ 0 }}
-      {% else %}
-        {{ v | float(0) }}
-      {% endif %}
-    {% endif %}
   any_window_open: >
     {% if windows_sensors.active_choice == 'YES' %}
       {% set ns = namespace(found=false) %}
@@ -712,7 +670,7 @@ actions:
             value_template: "{{ nighttime_auto_climate_enabled }}"
           - variables:
               target_mode: >-
-                  {% set d = forecast_temp | float - night_setpoint | float %}
+                  {% set d = room_temp | float - night_setpoint | float %}
                   {% if d > 2.0 %}
                     cool
                   {% elif d >= -2.0 %}
@@ -760,4 +718,4 @@ actions:
             data:
               fan_mode: "{{ target_fan }}"
       - delay:
-          seconds: 5
+          seconds: 30
