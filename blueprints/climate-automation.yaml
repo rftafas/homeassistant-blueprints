@@ -644,26 +644,41 @@ actions:
           - variables:
               target_temp: "{{ setpoint | float }}"
               target_mode: >-
-                  {% set d = room_temp | float - setpoint | float %}
-                  {% if d > 0.5 %}
-                    cool
-                  {% elif d < -0.5 %}
-                    heat
+                  {% set ext_delta = outside_temp | float - setpoint | float %}
+                  {% set int_delta = room_temp | float - setpoint | float %}
+                  {% if ext_delta >= 2 %}
+                    {% if int_delta >= -2 %}
+                      cool
+                    {% else %}
+                      fan_only
+                    {% endif %}
+                  {% elif ext_delta >= -2 %}
+                    {% if int_delta >= 2 %}
+                      cool
+                    {% elif int_delta >= -2 %}
+                      auto
+                    {% else %}
+                      heat
+                    {% endif %}
                   {% else %}
-                    auto
+                    {% if int_delta <= 2 %}
+                      heat
+                    {% else %}
+                      fan_only
+                    {% endif %}
                   {% endif %}
               target_fan: >-
-                  {% set d = room_temp | float - setpoint | float %}
-                  {% if d > 4.0 %}
+                  {% set int_delta = room_temp | float - setpoint | float %}
+                  {% if int_delta >= 4.0 %}
                     high
-                  {% elif d >= 2.0 %}
+                  {% elif int_delta >= 2.0 %}
                     medium
-                  {% elif d < -4.0 %}
-                    high
-                  {% elif d <= -2.0 %}
+                  {% elif int_delta >= -2.0 %}
+                    low
+                  {% elif int_delta >= -4.0 %}
                     medium
                   {% else %}
-                    low
+                    high
                   {% endif %}
         else:
           - condition: template
