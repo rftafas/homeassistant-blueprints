@@ -685,13 +685,28 @@ actions:
             value_template: "{{ nighttime_auto_climate_enabled }}"
           - variables:
               target_mode: >-
-                  {% set d = room_temp | float - night_setpoint | float %}
-                  {% if d > 2.0 %}
-                    cool
-                  {% elif d >= -2.0 %}
-                    auto
+                  {% set ext_delta = outside_temp | float - night_setpoint | float %}
+                  {% set int_delta = room_temp | float - night_setpoint | float %}
+                  {% if ext_delta >= 2 %}
+                    {% if int_delta >= -2 %}
+                      cool
+                    {% else %}
+                      fan_only
+                    {% endif %}
+                  {% elif ext_delta >= -2 %}
+                    {% if int_delta >= 2 %}
+                      cool
+                    {% elif int_delta >= -2 %}
+                      auto
+                    {% else %}
+                      heat
+                    {% endif %}
                   {% else %}
-                    heat
+                    {% if int_delta <= 2 %}
+                      heat
+                    {% else %}
+                      fan_only
+                    {% endif %}
                   {% endif %}
               target_fan: "low"
               target_temp: "{{ night_setpoint | float }}"
