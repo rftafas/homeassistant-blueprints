@@ -9,10 +9,10 @@ blueprint:
     - **Night:** setpoint-driven cool/heat/auto and fan bands
 
 
-    - **Triggers:** room and outdoor temperature, presence/windows, HVAC changes, optional manual re-evaluation helper
+    - **Triggers:** room and outdoor temperature, presence/windows, optional manual re-evaluation helper
 
 
-    - **Optional:** day/night enable helpers, manual lock after user HVAC changes (see Presence section)
+    - **Optional:** day/night enable helpers
   domain: automation
   author: rftafas
   homeassistant:
@@ -102,7 +102,7 @@ blueprint:
 
     presence_config:
       name: Presence
-      description: Optional presence routing and manual lock after user HVAC changes.
+      description: Optional presence routing.
       collapsed: true
       input:
         occupation_sensor:
@@ -148,21 +148,6 @@ blueprint:
                           label: Unoccupied duration before HVAC off
                           selector:
                             duration: {}
-
-        manual_lock:
-          name: Manual lock
-          description: >
-            When ON, a user change to HVAC mode, target temperature, or fan pauses
-            automatic climate on that trigger.
-
-            - **With presence sensor:** waits up to 4 hours or until the room is
-              unoccupied (whichever comes first).
-
-
-            - **Without presence sensor:** waits the full 4 hours (no early exit).
-          default: true
-          selector:
-            boolean: {}
 
     windows_config:
       name: Windows and doors
@@ -415,7 +400,6 @@ variables:
   night_set_point: !input night_set_point
   daytime_auto_climate_enable: !input daytime_auto_climate_enable
   nighttime_auto_climate_enable: !input nighttime_auto_climate_enable
-  manual_lock: !input manual_lock
   # Helpers and variables
   daytime_auto_climate_enabled: >
     {% if daytime_auto_climate_enable.active_choice == 'YES' %}
@@ -544,10 +528,6 @@ triggers:
       {% endif %}
     id: window_change
 
-  - trigger: state
-    entity_id: !input hvac_entity
-    id: hvac_config
-
   - trigger: template
     value_template: |
       {% if manual_trigger.active_choice == 'YES' %}
@@ -590,29 +570,8 @@ actions:
       target_fan: "low"
       target_temp: 24
 
-  # Routing choose (manual lock → presence → window → default climate)
+  # Routing choose (presence → window → default climate)
   - choose:
-      - conditions:
-          - condition: and
-            conditions:
-              - condition: trigger
-                id: hvac_config
-              - condition: template
-                value_template: "{{ manual_lock }}"
-              - condition: template
-                value_template: "{{ not room_unoccupied }}"
-        sequence:
-          - if:
-              - condition: template
-                value_template: "{{ occupation_sensor.active_choice == 'YES' }}"
-            then:
-              - wait_template: "{{ room_unoccupied }}"
-                timeout:
-                  hours: 4
-                continue_on_timeout: true
-            else:
-              - delay:
-                  hours: 4
       - conditions:
           - condition: template
             value_template: "{{ room_unoccupied }}"
