@@ -103,58 +103,30 @@ blueprint:
 
     presence_config:
       name: Presence
-      description: Optional presence routing.
+      description: Required occupation entity and hold duration before HVAC off.
       collapsed: true
       input:
         occupation_sensor:
-          name: Room occupation sensor (optional)
+          name: Room occupation sensor
           description: >
-            Gates day/night climate and can turn HVAC off after unoccupied duration.
-            Valid presence transitions only (`off`↔`on`), after validation window.
-
-
-            - **NO:** no presence-based routing
-
-
-            - **YES:** presence or occupancy entity
-          default:
-            active_choice: "NO"
+            Gates day/night climate and can turn HVAC off after the room stays unoccupied.
+            Valid presence transitions only (`off`↔`on`), after the hold duration.
+            Use an `input_boolean` left **on** if you do not want unoccupied shutoff.
           selector:
-            choose:
-              choices:
-                "NO":
-                  selector:
-                    constant:
-                      value: false
-                      label: No presence sensor
-                "YES":
-                  selector:
-                    entity:
-                      filter:
-                        - domain: binary_sensor
-                          device_class:
-                            - presence
-                            - occupancy
-                        - domain: input_boolean
+            entity:
+              filter:
+                - domain: binary_sensor
+                  device_class:
+                    - presence
+                    - occupancy
+                - domain: input_boolean
 
-        presence_validation_window:
-          name: Presence validation window
+        presence_duration:
+          name: Presence hold duration
           description: >
-            Seconds the sensor must stay in the new state before a transition
-            triggers a run. Filters brief Zigbee glitches. 0 = immediate.
-          default: 0
-          selector:
-            number:
-              min: 0
-              max: 600
-              unit_of_measurement: s
-              mode: box
-
-        presence_unoccupied_duration:
-          name: Unoccupied duration before HVAC off
-          description: >
-            After a validated transition to no presence, HVAC turns off only
-            if the room stays unoccupied this long.
+            How long the sensor must stay in a state before a transition counts,
+            and how long the room must stay unoccupied before HVAC turns off.
+            Filters brief Zigbee glitches on enter/leave.
           default:
             hours: 0
             minutes: 10
@@ -397,8 +369,6 @@ trigger_variables:
   day_set_point: !input day_set_point
   night_set_point: !input night_set_point
   manual_trigger: !input manual_trigger
-  occupation_sensor: !input occupation_sensor
-  presence_validation_window: !input presence_validation_window
   windows_sensors: !input windows_sensors
   daytime_auto_climate_enable: !input daytime_auto_climate_enable
   nighttime_auto_climate_enable: !input nighttime_auto_climate_enable
@@ -409,8 +379,6 @@ variables:
   room_temperature_sensors: !input room_temperature_sensors
   outside_temperature_sensors: !input outside_temperature_sensors
   occupation_sensor: !input occupation_sensor
-  presence_validation_window: !input presence_validation_window
-  presence_unoccupied_duration: !input presence_unoccupied_duration
   windows_sensors: !input windows_sensors
   day_set_point: !input day_set_point
   day_boundary: !input day_boundary
@@ -468,15 +436,6 @@ variables:
         {% endif %}
       {% endfor %}
       {{ ns.found }}
-    {% else %}
-      {{ false }}
-    {% endif %}
-  room_unoccupied: >
-    {% if occupation_sensor.active_choice == 'YES' %}
-      {% set entity = occupation_sensor.YES %}
-      {% set d = presence_unoccupied_duration %}
-      {% set duration = timedelta(days=d.days | default(0) | int, hours=d.hours | default(0) | int, minutes=d.minutes | default(0) | int, seconds=d.seconds | default(0) | int) %}
-      {{ is_state(entity, 'off') and (now() - (expand(entity) | first).last_changed) >= duration }}
     {% else %}
       {{ false }}
     {% endif %}
@@ -580,11 +539,6 @@ variables:
     {% if outside_ok.count == 0 %}
       {% set ns.issues = ns.issues + ['Outside temperature: no valid sensor'] %}
     {% endif %}
-    {% if occupation_sensor.active_choice == 'YES' %}
-      {% if states(occupation_sensor.YES) not in ['on', 'off'] %}
-        {% set ns.issues = ns.issues + ['Presence ' ~ occupation_sensor.YES ~ ': ' ~ states(occupation_sensor.YES)] %}
-      {% endif %}
-    {% endif %}
     {{ ns.issues | join('; ') }}
 
 triggers:
@@ -615,15 +569,14 @@ triggers:
     id: setpoint_change
 
   - trigger: state
-    entity_id: "{{ occupation_sensor.YES }}"
+    entity_id: !input occupation_sensor
     from:
       - "off"
       - "on"
     to:
       - "on"
       - "off"
-    for:
-      seconds: !input presence_validation_window
+    for: !input presence_duration
     id: presence_change
 
   - trigger: template
@@ -672,17 +625,33 @@ actions:
   # Routing choose (sanity → presence → window → default climate)
   - choose:
       - conditions:
-          - condition: template
-            value_template: "{{ inputs_unhealthy_log != '' }}"
+          - condition: or
+            conditions:
+              - condition: template
+                value_template: "{{ inputs_unhealthy_log != '' }}"
+              - condition: not
+                conditions:
+                  - condition: state
+                    entity_id: !input occupation_sensor
+                    state:
+                      - "on"
+                      - "off"
         sequence:
           - action: system_log.write
             data:
-              message: "Climate Control inputs unhealthy: {{ inputs_unhealthy_log }}"
+              message: >-
+                Climate Control inputs unhealthy:
+                {% if inputs_unhealthy_log != '' %} {{ inputs_unhealthy_log }}{% endif %}
+                {% if states(occupation_sensor) not in ['on', 'off'] %}
+                Presence {{ occupation_sensor }}: {{ states(occupation_sensor) }}
+                {% endif %}
               level: warning
           - stop: "Inputs unhealthy — HVAC unchanged"
       - conditions:
-          - condition: template
-            value_template: "{{ room_unoccupied }}"
+          - condition: state
+            entity_id: !input occupation_sensor
+            state: "off"
+            for: !input presence_duration
         sequence:
           - variables:
               target_mode: "off"
