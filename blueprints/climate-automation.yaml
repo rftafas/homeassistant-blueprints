@@ -482,6 +482,50 @@ variables:
     {% else %}
       {{ states(night_set_point.external) | float(24) }}
     {% endif %}
+  active_setpoint: >
+    {% if is_day %}
+      {{ setpoint | float }}
+    {% else %}
+      {{ night_setpoint | float }}
+    {% endif %}
+  current_mode: >
+    {% set units = expand(hvac_entity) | list %}
+    {% set ref_mode = units[0].state %}
+    {% set cc = namespace(current_mode=ref_mode) %}
+    {% for u in units %}
+      {% if u.state != ref_mode %}
+        {% set cc.current_mode = 'auto' %}
+      {% endif %}
+    {% endfor %}
+    {% if cc.current_mode == 'fan_only' %}
+      {% if room_temp | float > active_setpoint | float %}
+        fan_only_high
+      {% else %}
+        fan_only_low
+      {% endif %}
+    {% elif cc.current_mode == 'off' %}
+      auto
+    {% else %}
+      {{ cc.current_mode }}
+    {% endif %}
+  current_fan: >
+    {% set units = expand(hvac_entity) | list %}
+    {% if units | length == 0 %}
+      low
+    {% else %}
+      {% set ref_fan = state_attr(units[0], 'fan_mode') | default('low', true) %}
+      {% set cf = namespace(current_fan=ref_fan) %}
+      {% for u in units %}
+        {% if state_attr(u, 'fan_mode') | default('low', true) != ref_fan %}
+          {% set cf.current_fan = 'low' %}
+        {% endif %}
+      {% endfor %}
+      {% if cf.current_fan in ['low', 'medium', 'high'] %}
+        {{ cf.current_fan }}
+      {% else %}
+        low
+      {% endif %}
+    {% endif %}
 
 triggers:
   - trigger: state
@@ -596,81 +640,130 @@ actions:
     default:
       - if:
           - condition: template
-            value_template: "{{ is_day }}"
+            value_template: >
+              {% if is_day %}
+                {{ daytime_auto_climate_enabled }}
+              {% else %}
+                {{ nighttime_auto_climate_enabled }}
+              {% endif %}
         then:
-          - condition: template
-            value_template: "{{ daytime_auto_climate_enabled }}"
           - variables:
-              target_temp: "{{ setpoint | float }}"
+              target_temp: "{{ active_setpoint | float }}"
               target_mode: >-
-                  {% set ext_delta = outside_temp | float - setpoint | float %}
-                  {% set int_delta = room_temp | float - setpoint | float %}
-                  {% if ext_delta >= 2 %}
-                    {% if int_delta >= -2 %}
-                      cool
+                  {% set ext_delta = outside_temp | float - active_setpoint | float %}
+                  {% set int_delta = room_temp | float - active_setpoint | float %}
+                  {% if current_mode == 'auto' %}
+                    {% if ext_delta < -2 %}
+                      {% if int_delta > 2 %}
+                        fan_only
+                      {% else %}
+                        heat
+                      {% endif %}
+                    {% elif ext_delta > 2 %}
+                      {% if int_delta < -2 %}
+                        fan_only
+                      {% else %}
+                        cool
+                      {% endif %}
                     {% else %}
-                      fan_only
+                      {% if int_delta > 2 %}
+                        cool
+                      {% elif int_delta < -2 %}
+                        heat
+                      {% else %}
+                        auto
+                      {% endif %}
                     {% endif %}
-                  {% elif ext_delta >= -2 %}
-                    {% if int_delta >= 2 %}
+                  {% elif current_mode == 'cool' %}
+                    {% if ext_delta < -2 %}
+                      fan_only
+                    {% elif int_delta < -2 %}
+                      fan_only
+                    {% elif ext_delta < 2 and int_delta < 2 %}
+                      auto
+                    {% else %}
                       cool
-                    {% elif int_delta >= -2 %}
+                    {% endif %}
+                  {% elif current_mode == 'heat' %}
+                    {% if ext_delta > 2 %}
+                      fan_only
+                    {% elif int_delta > 2 %}
+                      fan_only
+                    {% elif ext_delta > -2 and int_delta > -2 %}
                       auto
                     {% else %}
                       heat
                     {% endif %}
-                  {% else %}
-                    {% if int_delta <= 2 %}
+                  {% elif current_mode == 'fan_only_low' %}
+                    {% if ext_delta > -2 %}
+                      cool
+                    {% elif int_delta < 2 %}
                       heat
+                    {% elif ext_delta < 2 and int_delta > -2 %}
+                      auto
                     {% else %}
                       fan_only
                     {% endif %}
+                  {% elif current_mode == 'fan_only_high' %}
+                    {% if ext_delta < 2 %}
+                      heat
+                    {% elif int_delta > -2 %}
+                      cool
+                    {% elif ext_delta < 2 and int_delta < 2 %}
+                      auto
+                    {% else %}
+                      fan_only
+                    {% endif %}
+                  {% else %}
+                    auto
                   {% endif %}
               target_fan: >-
-                  {% set int_delta = room_temp | float - setpoint | float %}
-                  {% if int_delta >= 4.0 %}
-                    high
-                  {% elif int_delta >= 2.0 %}
-                    medium
-                  {% elif int_delta >= -2.0 %}
+                  {% if is_day %}
+                    {% set int_delta = room_temp | float - setpoint | float %}
+                    {% if current_fan == 'low' %}
+                      {% if int_delta > 4.0 %}
+                        high
+                      {% elif int_delta > 2.0 %}
+                        medium
+                      {% elif int_delta < -4.0 %}
+                        high
+                      {% elif int_delta < -2.0 %}
+                        medium
+                      {% else %}
+                        low
+                      {% endif %}
+                    {% elif current_fan == 'medium' %}
+                      {% if int_delta > 4.0 %}
+                        high
+                      {% elif int_delta > 2.0 %}
+                        medium
+                      {% elif int_delta < -4.0 %}
+                        high
+                      {% elif int_delta < -2.0 %}
+                        medium
+                      {% else %}
+                        low
+                      {% endif %}
+                    {% elif current_fan == 'high' %}
+                      {% if int_delta > 4.0 %}
+                        high
+                      {% elif int_delta > 2.0 %}
+                        medium
+                      {% elif int_delta < -4.0 %}
+                        high
+                      {% elif int_delta < -2.0 %}
+                        medium
+                      {% else %}
+                        low
+                      {% endif %}                     
+                    {% else %}
+                      low
+                    {% endif %}
+                  {% else %}
                     low
-                  {% elif int_delta >= -4.0 %}
-                    medium
-                  {% else %}
-                    high
                   {% endif %}
-        else:
-          - condition: template
-            value_template: "{{ nighttime_auto_climate_enabled }}"
-          - variables:
-              target_mode: >-
-                  {% set ext_delta = outside_temp | float - night_setpoint | float %}
-                  {% set int_delta = room_temp | float - night_setpoint | float %}
-                  {% if ext_delta >= 2 %}
-                    {% if int_delta >= -2 %}
-                      cool
-                    {% else %}
-                      fan_only
-                    {% endif %}
-                  {% elif ext_delta >= -2 %}
-                    {% if int_delta >= 2 %}
-                      cool
-                    {% elif int_delta >= -2 %}
-                      auto
-                    {% else %}
-                      heat
-                    {% endif %}
-                  {% else %}
-                    {% if int_delta <= 2 %}
-                      heat
-                    {% else %}
-                      fan_only
-                    {% endif %}
-                  {% endif %}
-              target_fan: "low"
-              target_temp: "{{ night_setpoint | float }}"
 
-  # Apply    
+  # Apply
   - if:
       - condition: template
         value_template: >
@@ -679,24 +772,32 @@ actions:
           {% for hvac_unit in hvac_entity %}
             {% if states(hvac_unit) != target_mode %}
               {% set ns.result = true %}
-            {% elif states(hvac_unit) != "off" %}
-              {% if state_attr(hvac_unit, 'fan_mode') != target_fan %}
+            {% elif state_attr(hvac_unit, 'fan_mode') != target_fan %}
+              {% if target_mode != "off" %}
                 {% set ns.result = true %}
               {% endif %}
-              {% if state_attr(hvac_unit, 'temperature') != target_temp %}
+            {% elif state_attr(hvac_unit, 'temperature') != target_temp %}
+              {% if target_mode not in ['off', 'fan_only'] %}
                 {% set ns.result = true %}
               {% endif %}
             {% endif %}
           {% endfor %}
           {{ ns.result }}
     then:
-      - action: climate.set_temperature
+      - action: climate.set_hvac_mode
         target:
           entity_id: !input hvac_entity
         data:
           hvac_mode: "{{ target_mode }}"
-          temperature: "{{ target_temp }}"
-      # Set fan mode only if mode is not off, otherwise it may report error
+      - if:
+          - condition: template
+            value_template: "{{ target_mode not in ['off', 'fan_only'] }}"
+        then:
+          - action: climate.set_temperature
+            target:
+              entity_id: !input hvac_entity
+            data:
+              temperature: "{{ target_temp }}"
       - if:
           - condition: template
             value_template: "{{ target_mode != 'off' }}"
