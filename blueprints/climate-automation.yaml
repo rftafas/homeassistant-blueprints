@@ -474,17 +474,7 @@ variables:
         {% set cc.current_mode = 'auto' %}
       {% endif %}
     {% endfor %}
-    {% if cc.current_mode == 'fan_only' %}
-      {% if room_temp | float > active_setpoint | float %}
-        fan_only_high
-      {% else %}
-        fan_only_low
-      {% endif %}
-    {% elif cc.current_mode == 'off' %}
-      auto
-    {% else %}
-      {{ cc.current_mode }}
-    {% endif %}
+    {{ cc.current_mode }}
   current_fan: >
     {% set units = expand(hvac_entity) | list %}
     {% if units | length == 0 %}
@@ -727,25 +717,27 @@ actions:
                     {% else %}
                       heat
                     {% endif %}
-                  {% elif current_mode == 'fan_only_low' %}
-                    {% if ext_delta < 2 %}
-                      heat
-                    {% elif int_delta > -2 %}
-                      cool
-                    {% elif ext_delta < 2 and int_delta > -2 %}
-                      auto
+                  {% elif current_mode == 'fan_only' %}
+                    {% if room_temp | float > active_setpoint | float %}
+                      {% if ext_delta < 2 %}
+                        heat
+                      {% elif int_delta > -2 %}
+                        cool
+                      {% elif ext_delta < 2 and int_delta > -2 %}
+                        auto
+                      {% else %}
+                        fan_only
+                      {% endif %}
                     {% else %}
-                      fan_only
-                    {% endif %}
-                  {% elif current_mode == 'fan_only_high' %}
-                    {% if ext_delta > -2 %}
-                      cool
-                    {% elif int_delta < 2 %}
-                      heat
-                    {% elif ext_delta < 2 and int_delta < 2 %}
-                      auto
-                    {% else %}
-                      fan_only
+                      {% if ext_delta > -2 %}
+                        cool
+                      {% elif int_delta < 2 %}
+                        heat
+                      {% elif ext_delta < 2 and int_delta < 2 %}
+                        auto
+                      {% else %}
+                        fan_only
+                      {% endif %}
                     {% endif %}
                   {% else %}
                     auto
