@@ -43,7 +43,7 @@ blueprint:
             - **NO:** automatic triggers only
 
 
-            - **YES:** `input_boolean` or `binary_sensor` — ON forces a run
+            - **YES:** `input_boolean`, `input_button`, or `binary_sensor` — ON forces a run
           default:
             active_choice: "NO"
           selector:
@@ -60,6 +60,7 @@ blueprint:
                       filter:
                         - domain: binary_sensor
                         - domain: input_boolean
+                        - domain: input_button
 
     temperature_config:
       name: Temperature sensors
@@ -513,10 +514,10 @@ variables:
     {% if units | length == 0 %}
       low
     {% else %}
-      {% set ref_fan = state_attr(units[0], 'fan_mode') | default('low', true) %}
+      {% set ref_fan = units[0].attributes.fan_mode | default('low', true) %}
       {% set cf = namespace(current_fan=ref_fan) %}
       {% for u in units %}
-        {% if state_attr(u, 'fan_mode') | default('low', true) != ref_fan %}
+        {% if u.attributes.fan_mode | default('low', true) != ref_fan %}
           {% set cf.current_fan = 'low' %}
         {% endif %}
       {% endfor %}
@@ -695,20 +696,20 @@ actions:
                       heat
                     {% endif %}
                   {% elif current_mode == 'fan_only_low' %}
-                    {% if ext_delta > -2 %}
-                      cool
-                    {% elif int_delta < 2 %}
+                    {% if ext_delta < 2 %}
                       heat
+                    {% elif int_delta > -2 %}
+                      cool
                     {% elif ext_delta < 2 and int_delta > -2 %}
                       auto
                     {% else %}
                       fan_only
                     {% endif %}
                   {% elif current_mode == 'fan_only_high' %}
-                    {% if ext_delta < 2 %}
-                      heat
-                    {% elif int_delta > -2 %}
+                    {% if ext_delta > -2 %}
                       cool
+                    {% elif int_delta < 2 %}
+                      heat
                     {% elif ext_delta < 2 and int_delta < 2 %}
                       auto
                     {% else %}
@@ -784,11 +785,6 @@ actions:
           {% endfor %}
           {{ ns.result }}
     then:
-      - action: climate.set_hvac_mode
-        target:
-          entity_id: !input hvac_entity
-        data:
-          hvac_mode: "{{ target_mode }}"
       - if:
           - condition: template
             value_template: "{{ target_mode not in ['off', 'fan_only'] }}"
@@ -797,7 +793,14 @@ actions:
             target:
               entity_id: !input hvac_entity
             data:
+              hvac_mode: "{{ target_mode }}"
               temperature: "{{ target_temp }}"
+        else:
+          - action: climate.set_hvac_mode
+            target:
+              entity_id: !input hvac_entity
+            data:
+              hvac_mode: "{{ target_mode }}"
       - if:
           - condition: template
             value_template: "{{ target_mode != 'off' }}"
