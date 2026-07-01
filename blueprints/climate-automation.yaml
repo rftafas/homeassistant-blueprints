@@ -677,13 +677,13 @@ actions:
                   {% set int_delta = room_temp | float - active_setpoint | float %}
                   {% if current_mode == 'auto' %}
                     {% if ext_delta < -2 %}
-                      {% if int_delta > 2 %}
+                      {% if int_delta > 0 %}
                         fan_only
                       {% else %}
                         heat
                       {% endif %}
                     {% elif ext_delta > 2 %}
-                      {% if int_delta < -2 %}
+                      {% if int_delta < 0 %}
                         fan_only
                       {% else %}
                         cool
@@ -700,7 +700,7 @@ actions:
                   {% elif current_mode == 'cool' %}
                     {% if ext_delta < -2 %}
                       fan_only
-                    {% elif int_delta < -2 %}
+                    {% elif int_delta < 0 %}
                       fan_only
                     {% elif ext_delta < 2 and int_delta < 2 %}
                       auto
@@ -710,7 +710,7 @@ actions:
                   {% elif current_mode == 'heat' %}
                     {% if ext_delta > 2 %}
                       fan_only
-                    {% elif int_delta > 2 %}
+                    {% elif int_delta > 0 %}
                       fan_only
                     {% elif ext_delta > -2 and int_delta > -2 %}
                       auto
@@ -719,24 +719,32 @@ actions:
                     {% endif %}
                   {% elif current_mode == 'fan_only' %}
                     {% if room_temp | float > active_setpoint | float %}
-                      {% if ext_delta < 2 %}
-                        heat
-                      {% elif int_delta > -2 %}
-                        cool
-                      {% elif ext_delta < 2 and int_delta > -2 %}
-                        auto
+                      {% if ext_delta < -2 %}
+                        {% if int_delta < 0 %}
+                          heat
+                        {% else %}
+                          fan_only
+                        {% endif %}
                       {% else %}
-                        fan_only
+                        {% if int_delta > 2 %}
+                          cool
+                        {% else %}
+                          auto
+                        {% endif %}
                       {% endif %}
                     {% else %}
-                      {% if ext_delta > -2 %}
-                        cool
-                      {% elif int_delta < 2 %}
-                        heat
-                      {% elif ext_delta < 2 and int_delta < 2 %}
-                        auto
+                      {% if ext_delta > 2 %}
+                        {% if int_delta > 0 %}
+                          cool
+                        {% else %}
+                          fan_only
+                        {% endif %}
                       {% else %}
-                        fan_only
+                        {% if int_delta < -2 %}
+                          heat
+                        {% else %}
+                          auto
+                        {% endif %}
                       {% endif %}
                     {% endif %}
                   {% else %}
