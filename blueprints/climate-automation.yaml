@@ -109,20 +109,16 @@ blueprint:
         occupation_sensor:
           name: Room occupation sensor (optional)
           description: >
-            Gates day/night climate and can turn HVAC off after unoccupied duration. Any presence entity state change re-evaluates the run.
+            Gates day/night climate and can turn HVAC off after unoccupied duration.
+            Valid presence transitions only (`off`↔`on`), after validation window.
 
 
             - **NO:** no presence-based routing
 
 
-            - **YES:** presence or occupancy entity and unoccupied duration before HVAC off
+            - **YES:** presence or occupancy entity
           default:
             active_choice: "NO"
-            YES:
-              presence_unoccupied_duration:
-                hours: 0
-                minutes: 10
-                seconds: 0
           selector:
             choose:
               choices:
@@ -133,22 +129,38 @@ blueprint:
                       label: No presence sensor
                 "YES":
                   selector:
-                    object:
-                      fields:
-                        entity:
-                          label: Presence / occupancy entity
-                          selector:
-                            entity:
-                              filter:
-                                - domain: binary_sensor
-                                  device_class:
-                                    - presence
-                                    - occupancy
-                                - domain: input_boolean
-                        presence_unoccupied_duration:
-                          label: Unoccupied duration before HVAC off
-                          selector:
-                            duration: {}
+                    entity:
+                      filter:
+                        - domain: binary_sensor
+                          device_class:
+                            - presence
+                            - occupancy
+                        - domain: input_boolean
+
+        presence_validation_window:
+          name: Presence validation window
+          description: >
+            Seconds the sensor must stay in the new state before a transition
+            triggers a run. Filters brief Zigbee glitches. 0 = immediate.
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 600
+              unit_of_measurement: s
+              mode: box
+
+        presence_unoccupied_duration:
+          name: Unoccupied duration before HVAC off
+          description: >
+            After a validated transition to no presence, HVAC turns off only
+            if the room stays unoccupied this long.
+          default:
+            hours: 0
+            minutes: 10
+            seconds: 0
+          selector:
+            duration: {}
 
     windows_config:
       name: Windows and doors
@@ -270,6 +282,7 @@ blueprint:
                     number:
                       min: 18
                       max: 30
+                      step: 0.5
                       unit_of_measurement: °C
                       mode: slider
                 external:
@@ -337,6 +350,7 @@ blueprint:
                     number:
                       min: 18
                       max: 30
+                      step: 0.5
                       unit_of_measurement: °C
                       mode: slider
                 external:
@@ -384,6 +398,7 @@ trigger_variables:
   night_set_point: !input night_set_point
   manual_trigger: !input manual_trigger
   occupation_sensor: !input occupation_sensor
+  presence_validation_window: !input presence_validation_window
   windows_sensors: !input windows_sensors
   daytime_auto_climate_enable: !input daytime_auto_climate_enable
   nighttime_auto_climate_enable: !input nighttime_auto_climate_enable
@@ -394,6 +409,8 @@ variables:
   room_temperature_sensors: !input room_temperature_sensors
   outside_temperature_sensors: !input outside_temperature_sensors
   occupation_sensor: !input occupation_sensor
+  presence_validation_window: !input presence_validation_window
+  presence_unoccupied_duration: !input presence_unoccupied_duration
   windows_sensors: !input windows_sensors
   day_set_point: !input day_set_point
   day_boundary: !input day_boundary
@@ -456,10 +473,10 @@ variables:
     {% endif %}
   room_unoccupied: >
     {% if occupation_sensor.active_choice == 'YES' %}
-      {% set entity = occupation_sensor.YES.entity %}
-      {% set d = occupation_sensor.YES.presence_unoccupied_duration %}
+      {% set entity = occupation_sensor.YES %}
+      {% set d = presence_unoccupied_duration %}
       {% set duration = timedelta(days=d.days | default(0) | int, hours=d.hours | default(0) | int, minutes=d.minutes | default(0) | int, seconds=d.seconds | default(0) | int) %}
-      {{ is_state(entity, 'off') and (now() - states[entity].last_changed) >= duration }}
+      {{ is_state(entity, 'off') and (now() - (expand(entity) | first).last_changed) >= duration }}
     {% else %}
       {{ false }}
     {% endif %}
@@ -527,6 +544,48 @@ variables:
         low
       {% endif %}
     {% endif %}
+  inputs_unhealthy_log: >
+    {% set ns = namespace(issues=[]) %}
+    {% set hvac_units = expand(hvac_entity) | list %}
+    {% if hvac_units | length == 0 %}
+      {% set ns.issues = ns.issues + ['HVAC: no entities configured'] %}
+    {% else %}
+      {% for u in hvac_units %}
+        {% if u.state in ['unknown', 'unavailable'] %}
+          {% set ns.issues = ns.issues + ['HVAC ' ~ u.entity_id ~ ': ' ~ u.state] %}
+        {% endif %}
+      {% endfor %}
+    {% endif %}
+    {% set room_ok = namespace(count=0) %}
+    {% for e in expand(room_temperature_sensors) %}
+      {% if e.state not in ['unavailable', 'unknown', 'none', ''] %}
+        {% set v = e.state | float(none) %}
+        {% if v is number %}
+          {% set room_ok.count = room_ok.count + 1 %}
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+    {% if room_ok.count == 0 %}
+      {% set ns.issues = ns.issues + ['Room temperature: no valid sensor'] %}
+    {% endif %}
+    {% set outside_ok = namespace(count=0) %}
+    {% for e in expand(outside_temperature_sensors) %}
+      {% if e.state not in ['unavailable', 'unknown', 'none', ''] %}
+        {% set v = e.state | float(none) %}
+        {% if v is number %}
+          {% set outside_ok.count = outside_ok.count + 1 %}
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+    {% if outside_ok.count == 0 %}
+      {% set ns.issues = ns.issues + ['Outside temperature: no valid sensor'] %}
+    {% endif %}
+    {% if occupation_sensor.active_choice == 'YES' %}
+      {% if states(occupation_sensor.YES) not in ['on', 'off'] %}
+        {% set ns.issues = ns.issues + ['Presence ' ~ occupation_sensor.YES ~ ': ' ~ states(occupation_sensor.YES)] %}
+      {% endif %}
+    {% endif %}
+    {{ ns.issues | join('; ') }}
 
 triggers:
   - trigger: state
@@ -555,13 +614,16 @@ triggers:
       {% endif %}
     id: setpoint_change
 
-  - trigger: template
-    value_template: |
-      {% if occupation_sensor.active_choice == 'YES' %}
-        {{ states(occupation_sensor.YES.entity) }}
-      {% else %}
-        {{ false }}
-      {% endif %}
+  - trigger: state
+    entity_id: "{{ occupation_sensor.YES }}"
+    from:
+      - "off"
+      - "on"
+    to:
+      - "on"
+      - "off"
+    for:
+      seconds: !input presence_validation_window
     id: presence_change
 
   - trigger: template
@@ -600,23 +662,24 @@ triggers:
       {% endif %}
     id: night_enable_on
 
-conditions:
-  - condition: not
-    conditions:
-      - condition: state
-        entity_id: !input hvac_entity
-        state:
-          - "unavailable"
-          - "unknown"
-
 actions:
   - variables:
       target_mode: "off"
       target_fan: "low"
       target_temp: 24
 
-  # Routing choose (presence → window → default climate)
+
+  # Routing choose (sanity → presence → window → default climate)
   - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ inputs_unhealthy_log != '' }}"
+        sequence:
+          - action: system_log.write
+            data:
+              message: "Climate Control inputs unhealthy: {{ inputs_unhealthy_log }}"
+              level: warning
+          - stop: "Inputs unhealthy — HVAC unchanged"
       - conditions:
           - condition: template
             value_template: "{{ room_unoccupied }}"
@@ -629,12 +692,12 @@ actions:
         sequence:
           - if:
               - condition: template
-                value_template: "{{ (outside_temp | float - setpoint | float) | abs <= 2 }}"
+                value_template: "{{ (outside_temp | float - active_setpoint | float) | abs <= 2 }}"
             then:
               - variables:
                   target_mode: "fan_only"
                   target_fan: "low"
-                  target_temp: "{{ setpoint | float }}"
+                  target_temp: "{{ active_setpoint | float }}"
             else:
               - variables:
                   target_mode: "off"
