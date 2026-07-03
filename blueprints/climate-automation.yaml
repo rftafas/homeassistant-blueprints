@@ -22,7 +22,6 @@ blueprint:
     main_config:
       name: Main Configuration
       description: HVAC targets and optional manual re-evaluation.
-      collapsed: true
       input:
         hvac_entity:
           name: HVAC Entity
@@ -65,7 +64,6 @@ blueprint:
     temperature_config:
       name: Temperature sensors
       description: Indoor and outdoor sources, ventilation band, and forecast.
-      collapsed: true
       input:
         room_temperature_sensors:
           name: Indoor temperature sensors
@@ -104,7 +102,6 @@ blueprint:
     presence_config:
       name: Presence
       description: Required occupation entity and hold duration before HVAC off.
-      collapsed: true
       input:
         occupation_sensor:
           name: Room occupation sensor
@@ -137,7 +134,6 @@ blueprint:
     windows_config:
       name: Windows and doors
       description: Optional opening sensors and ventilation suspend while open.
-      collapsed: true
       input:
         windows_sensors:
           name: Windows / doors (optional)
@@ -178,7 +174,6 @@ blueprint:
     day_config:
       name: Day
       description: Daytime enable, boundary, and setpoint.
-      collapsed: true
       input:
         daytime_auto_climate_enable:
           name: Daytime enable helper (optional)
@@ -266,7 +261,6 @@ blueprint:
     night_config:
       name: Night
       description: Nighttime enable, boundary, and setpoint.
-      collapsed: true
       input:
         nighttime_auto_climate_enable:
           name: Nighttime enable helper (optional)
@@ -676,21 +670,17 @@ actions:
                   {% set ext_delta = outside_temp | float - active_setpoint | float %}
                   {% set int_delta = room_temp | float - active_setpoint | float %}
                   {% if current_mode == 'auto' %}
-                    {% if ext_delta < -2 %}
-                      {% if int_delta > 0 %}
-                        fan_only
-                      {% else %}
-                        heat
-                      {% endif %}
-                    {% elif ext_delta > 2 %}
-                      {% if int_delta < 0 %}
-                        fan_only
-                      {% else %}
+                    {% if ext_delta > 0 %}
+                      {% if int_delta > 2 %}
                         cool
+                      {% elif int_delta < -2 %}
+                        fan_only
+                      {% else %}
+                        auto
                       {% endif %}
                     {% else %}
                       {% if int_delta > 2 %}
-                        cool
+                        fan_only
                       {% elif int_delta < -2 %}
                         heat
                       {% else %}
@@ -698,61 +688,37 @@ actions:
                       {% endif %}
                     {% endif %}
                   {% elif current_mode == 'cool' %}
-                    {% if ext_delta < -2 %}
-                      fan_only
-                    {% elif int_delta < 0 %}
-                      fan_only
-                    {% elif ext_delta < 2 and int_delta < 2 %}
+                    {% if int_delta < 2 %}
                       auto
+                    {% elif ext_delta < -2 %}
+                      fan_only
                     {% else %}
                       cool
                     {% endif %}
                   {% elif current_mode == 'heat' %}
-                    {% if ext_delta > 2 %}
-                      fan_only
-                    {% elif int_delta > 0 %}
-                      fan_only
-                    {% elif ext_delta > -2 and int_delta > -2 %}
+                    {% if int_delta > -2 %}
                       auto
+                    {% elif ext_delta > 2 %}
+                      fan_only
                     {% else %}
                       heat
                     {% endif %}
                   {% elif current_mode == 'fan_only' %}
-                    {% if room_temp | float > active_setpoint | float %}
-                      {% if ext_delta < -2 %}
-                        {% if int_delta < 0 %}
-                          heat
-                        {% else %}
-                          fan_only
-                        {% endif %}
-                      {% else %}
-                        {% if int_delta > 2 %}
-                          cool
-                        {% else %}
-                          auto
-                        {% endif %}
-                      {% endif %}
+                    {% if ext_delta > -2 and int_delta > 2 %}
+                      cool
+                    {% elif ext_delta < 2 and int_delta < -2 %}
+                      heat
+                    {% elif -2 < int_delta and int_delta < 2 %}
+                      auto
                     {% else %}
-                      {% if ext_delta > 2 %}
-                        {% if int_delta > 0 %}
-                          cool
-                        {% else %}
-                          fan_only
-                        {% endif %}
-                      {% else %}
-                        {% if int_delta < -2 %}
-                          heat
-                        {% else %}
-                          auto
-                        {% endif %}
-                      {% endif %}
+                      fan_only
                     {% endif %}
                   {% else %}
                     auto
                   {% endif %}
               target_fan: >-
                   {% if is_day %}
-                    {% set int_delta = room_temp | float - setpoint | float %}
+                    {% set int_delta = room_temp | float - active_setpoint | float %}
                     {% if current_fan == 'low' %}
                       {% if int_delta > 4.0 %}
                         high
