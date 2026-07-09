@@ -1,7 +1,7 @@
 blueprint:
   name: Simple Climate Control
   description: >
-    Reactive day/night climate for one or more HVAC entities: daytime comfort bands (4 °C), nighttime mode from a forecast temperature, optional presence and openings, and a single idempotent apply per run.
+    Reactive day/night climate for one or more HVAC entities: daytime comfort bands (4 °C), nighttime mode from a forecast temperature, presence and window gating with a shared confirmation threshold, and a single idempotent apply per run.
 
     - **Day:** setpoint-driven cool/heat/auto and fan bands
 
@@ -66,48 +66,43 @@ blueprint:
       description: Indoor and outdoor sources, ventilation band, and forecast.
       input:
         room_temperature_sensors:
-          name: Indoor temperature sensors
+          name: Indoor temperature sensor
           description: >
-            Averaged for daytime comfort bands and logic.
+            Used for daytime comfort bands and logic.
 
-            - **Domains:** `sensor`, `number` (not `input_number`)
+            - **Domain:** `sensor` only
 
-
-            - **Required:** one or more entities
-          default: []
+            - **Multiple physical sensors?** Combine them with a template/statistics helper first, then point this at the helper.
           selector:
             entity:
-              multiple: true
               filter:
                 - domain: sensor
-                - domain: number
+                  device_class: temperature
 
         outside_temperature_sensors:
-          name: Outdoor temperature sensors
+          name: Outdoor temperature sensor
           description: >
-            Averaged for the window ventilation band (±2 °C from day setpoint).
+            Used for the window ventilation band (±2 °C from day setpoint).
 
-            - **Domains:** `sensor`, `number` (not `input_number`)
+            - **Domain:** `sensor` only
 
-
-            - **Required:** one or more entities
-          default: []
+            - **Multiple physical sensors?** Combine them with a template/statistics helper first, then point this at the helper.
           selector:
             entity:
-              multiple: true
               filter:
                 - domain: sensor
-                - domain: number
+                  device_class: temperature
 
     presence_config:
       name: Presence
-      description: Required occupation entity and hold duration before HVAC off.
+      description: Required occupation entity gating day/night climate and unoccupied shutoff.
       input:
         occupation_sensor:
           name: Room occupation sensor
           description: >
             Gates day/night climate and can turn HVAC off after the room stays unoccupied.
-            Valid presence transitions only (`off`↔`on`), after the hold duration.
+            Valid presence transitions only (`off`↔`on`), after the
+            **Action detection threshold** (see Detection timing).
             Use an `input_boolean` left **on** if you do not want unoccupied shutoff.
           selector:
             entity:
@@ -118,58 +113,45 @@ blueprint:
                     - occupancy
                 - domain: input_boolean
 
-        presence_duration:
-          name: Presence hold duration
+    windows_config:
+      name: Windows and doors
+      description: Opening sensors; ventilation band or off while open, day/night control resumes once closed.
+      input:
+        windows_sensors:
+          name: Windows / doors
           description: >
-            How long the sensor must stay in a state before a transition counts,
-            and how long the room must stay unoccupied before HVAC turns off.
-            Filters brief Zigbee glitches on enter/leave.
+            While any opening is confirmed open (see Detection timing), HVAC
+            uses the ventilation band or off, and day/night logic is skipped
+            until all are confirmed closed.
+
+            Sensor convention: **off** = closed, **on** = open.
+
+            No physical sensor? Use an `input_boolean` left permanently **off**
+            (always "closed") — same trick as the occupation sensor.
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain: binary_sensor
+                - domain: input_boolean
+
+    threshold_config:
+      name: Detection timing
+      description: Global confirmation window applied to presence and window sensors.
+      input:
+        action_detection_threshold:
+          name: Action detection threshold
+          description: >
+            How long a sensor must continuously hold a state before it's
+            treated as confirmed — sustained presence/absence, and sustained
+            window open/closed. Filters brief glitches and pass-throughs.
+            Until a state is confirmed, the automation leaves HVAC unchanged.
           default:
             hours: 0
             minutes: 10
             seconds: 0
           selector:
             duration: {}
-
-    windows_config:
-      name: Windows and doors
-      description: Optional opening sensors and ventilation suspend while open.
-      input:
-        windows_sensors:
-          name: Windows / doors (optional)
-          description: >
-            While any opening is reported open, HVAC uses ventilation band or
-            off and day/night logic is skipped until all are closed. Use sensors
-            whose state already reflects when you want action (debounce/delay
-            on the device).
-
-            Sensor convention: **off** = closed, **on** = open.
-
-            - **NO:** no window-based routing
-
-
-            - **YES:** pick opening sensors (debounce/delay on the sensor if needed)
-          default:
-            active_choice: "NO"
-          selector:
-            choose:
-              choices:
-                "NO":
-                  selector:
-                    constant:
-                      value: false
-                      label: No window sensors
-                "YES":
-                  selector:
-                    object:
-                      fields:
-                        sensors:
-                          label: Window / door sensors
-                          selector:
-                            entity:
-                              multiple: true
-                              filter:
-                                domain: binary_sensor
 
     day_config:
       name: Day
@@ -288,6 +270,34 @@ blueprint:
                         - domain: binary_sensor
                         - domain: input_boolean
 
+        night_boundary:
+          name: Night boundary
+          description: >
+            When nighttime begins (day ends). Independent of day boundary.
+
+            - **sun:** sunset (below horizon)
+
+
+            - **fixed:** clock time when night starts
+          default:
+            active_choice: "sun"
+          selector:
+            choose:
+              choices:
+                sun:
+                  selector:
+                    constant:
+                      value: true
+                      label: Sunset
+                fixed:
+                  selector:
+                    object:
+                      fields:
+                        time:
+                          label: Night begins
+                          selector:
+                            time: {}
+
         night_set_point:
           name: Night setpoint
           description: >
@@ -328,34 +338,6 @@ blueprint:
                         - domain: number
                         - domain: input_number
 
-        night_boundary:
-          name: Night boundary
-          description: >
-            When nighttime begins (day ends). Independent of day boundary.
-
-            - **sun:** sunset (below horizon)
-
-
-            - **fixed:** clock time when night starts
-          default:
-            active_choice: "sun"
-          selector:
-            choose:
-              choices:
-                sun:
-                  selector:
-                    constant:
-                      value: true
-                      label: Sunset
-                fixed:
-                  selector:
-                    object:
-                      fields:
-                        time:
-                          label: Night begins
-                          selector:
-                            time: {}
-
 mode: single
 max_exceeded: silent
 
@@ -363,24 +345,26 @@ trigger_variables:
   day_set_point: !input day_set_point
   night_set_point: !input night_set_point
   manual_trigger: !input manual_trigger
-  windows_sensors: !input windows_sensors
   daytime_auto_climate_enable: !input daytime_auto_climate_enable
   nighttime_auto_climate_enable: !input nighttime_auto_climate_enable
 
 variables:
-  # Entities from inputs as variables
+  # Raw entities/config from inputs
   hvac_entity: !input hvac_entity
   room_temperature_sensors: !input room_temperature_sensors
   outside_temperature_sensors: !input outside_temperature_sensors
-  occupation_sensor: !input occupation_sensor
-  windows_sensors: !input windows_sensors
   day_set_point: !input day_set_point
   day_boundary: !input day_boundary
   night_boundary: !input night_boundary
   night_set_point: !input night_set_point
   daytime_auto_climate_enable: !input daytime_auto_climate_enable
   nighttime_auto_climate_enable: !input nighttime_auto_climate_enable
-  # Helpers and variables
+
+  # Current sensor readings
+  room_temp: "{{ states(room_temperature_sensors) | float(0) }}"
+  outside_temp: "{{ states(outside_temperature_sensors) | float(0) }}"
+
+  # Enable-helper gates (no helper configured => always enabled)
   daytime_auto_climate_enabled: >
     {% if daytime_auto_climate_enable.active_choice == 'YES' %}
       {{ is_state(daytime_auto_climate_enable.YES, 'on') }}
@@ -393,46 +377,8 @@ variables:
     {% else %}
       {{ true }}
     {% endif %}
-  setpoint: >
-    {% if day_set_point.active_choice == 'fixed' %}
-      {{ day_set_point.fixed | float(24) }}
-    {% else %}
-      {{ states(day_set_point.external) | float(24) }}
-    {% endif %}
-  room_temp: >
-    {% set ns = namespace(values=[]) %}
-    {% for e in expand(room_temperature_sensors) %}
-      {% if e.state not in ['unavailable', 'unknown', 'none', ''] %}
-        {% set v = e.state | float(none) %}
-        {% if v is number %}
-          {% set ns.values = ns.values + [v] %}
-        {% endif %}
-      {% endif %}
-    {% endfor %}
-    {{ (ns.values | sum) / (ns.values | length) if ns.values | length > 0 else 0 }}
-  outside_temp: >
-    {% set ns = namespace(values=[]) %}
-    {% for e in expand(outside_temperature_sensors) %}
-      {% if e.state not in ['unavailable', 'unknown', 'none', ''] %}
-        {% set v = e.state | float(none) %}
-        {% if v is number %}
-          {% set ns.values = ns.values + [v] %}
-        {% endif %}
-      {% endif %}
-    {% endfor %}
-    {{ (ns.values | sum) / (ns.values | length) if ns.values | length > 0 else 0 }}
-  any_window_open: >
-    {% if windows_sensors.active_choice == 'YES' %}
-      {% set ns = namespace(found=false) %}
-      {% for e in expand(windows_sensors.YES.sensors) %}
-        {% if e.state == 'on' %}
-          {% set ns.found = true %}
-        {% endif %}
-      {% endfor %}
-      {{ ns.found }}
-    {% else %}
-      {{ false }}
-    {% endif %}
+
+  # Day/night boundary and setpoint resolution
   is_day: >
     {% if day_boundary.active_choice == 'sun' %}
       {% set day_ok = is_state('sun.sun', 'above_horizon') %}
@@ -445,9 +391,15 @@ variables:
       {% set night_ok = now() < today_at(night_boundary.fixed.time) %}
     {% endif %}
     {{ day_ok and night_ok }}
+  day_setpoint: >
+    {% if day_set_point.active_choice == 'fixed' %}
+      {{ day_set_point.fixed | float(24) }}
+    {% else %}
+      {{ states(day_set_point.external) | float(24) }}
+    {% endif %}
   night_setpoint: >
     {% if night_set_point.active_choice == 'day_copy' %}
-      {{ setpoint | float }}
+      {{ day_setpoint | float }}
     {% elif night_set_point.active_choice == 'fixed' %}
       {{ night_set_point.fixed | float(24) }}
     {% else %}
@@ -455,75 +407,120 @@ variables:
     {% endif %}
   active_setpoint: >
     {% if is_day %}
-      {{ setpoint | float }}
+      {{ day_setpoint | float }}
     {% else %}
       {{ night_setpoint | float }}
     {% endif %}
+
+  # HVAC current state (first entity is master; others are ignored)
   current_mode: >
     {% set units = expand(hvac_entity) | list %}
-    {% set ref_mode = units[0].state %}
-    {% set cc = namespace(current_mode=ref_mode) %}
-    {% for u in units %}
-      {% if u.state != ref_mode %}
-        {% set cc.current_mode = 'auto' %}
-      {% endif %}
-    {% endfor %}
-    {{ cc.current_mode }}
+    {{ units[0].state }}
   current_fan: >
     {% set units = expand(hvac_entity) | list %}
-    {% if units | length == 0 %}
-      low
+    {% set master_fan = units[0].attributes.fan_mode | default('low', true) %}
+    {% if master_fan in ['low', 'medium', 'high'] %}
+      {{ master_fan }}
     {% else %}
-      {% set ref_fan = units[0].attributes.fan_mode | default('low', true) %}
-      {% set cf = namespace(current_fan=ref_fan) %}
-      {% for u in units %}
-        {% if u.attributes.fan_mode | default('low', true) != ref_fan %}
-          {% set cf.current_fan = 'low' %}
+      low
+    {% endif %}
+
+  # Next computed target state
+  next_mode: >-
+    {% set ext_delta = outside_temp | float - active_setpoint | float %}
+    {% set int_delta = room_temp | float - active_setpoint | float %}
+    {% if current_mode == 'auto' %}
+      {% if ext_delta > 0 %}
+        {% if int_delta > 2 %}
+          cool
+        {% elif int_delta < -2 %}
+          fan_only
+        {% else %}
+          auto
         {% endif %}
-      {% endfor %}
-      {% if cf.current_fan in ['low', 'medium', 'high'] %}
-        {{ cf.current_fan }}
+      {% else %}
+        {% if int_delta > 2 %}
+          fan_only
+        {% elif int_delta < -2 %}
+          heat
+        {% else %}
+          auto
+        {% endif %}
+      {% endif %}
+    {% elif current_mode == 'cool' %}
+      {% if int_delta < 2 %}
+        auto
+      {% elif ext_delta < -2 %}
+        fan_only
+      {% else %}
+        cool
+      {% endif %}
+    {% elif current_mode == 'heat' %}
+      {% if int_delta > -2 %}
+        auto
+      {% elif ext_delta > 2 %}
+        fan_only
+      {% else %}
+        heat
+      {% endif %}
+    {% elif current_mode == 'fan_only' %}
+      {% if ext_delta > -2 and int_delta > 2 %}
+        cool
+      {% elif ext_delta < 2 and int_delta < -2 %}
+        heat
+      {% elif -2 < int_delta and int_delta < 2 %}
+        auto
+      {% else %}
+        fan_only
+      {% endif %}
+    {% else %}
+      auto
+    {% endif %}
+  next_fan: >-
+    {% if is_day %}
+      {% set int_delta = room_temp | float - active_setpoint | float %}
+      {% if current_fan == 'low' %}
+        {% if int_delta > 4.0 %}
+          high
+        {% elif int_delta > 2.0 %}
+          medium
+        {% elif int_delta < -4.0 %}
+          high
+        {% elif int_delta < -2.0 %}
+          medium
+        {% else %}
+          low
+        {% endif %}
+      {% elif current_fan == 'medium' %}
+        {% if int_delta > 4.0 %}
+          high
+        {% elif int_delta > 2.0 %}
+          medium
+        {% elif int_delta < -4.0 %}
+          high
+        {% elif int_delta < -2.0 %}
+          medium
+        {% else %}
+          low
+        {% endif %}
+      {% elif current_fan == 'high' %}
+        {% if int_delta > 4.0 %}
+          high
+        {% elif int_delta > 2.0 %}
+          medium
+        {% elif int_delta < -4.0 %}
+          high
+        {% elif int_delta < -2.0 %}
+          medium
+        {% else %}
+          low
+        {% endif %}
       {% else %}
         low
       {% endif %}
-    {% endif %}
-  inputs_unhealthy_log: >
-    {% set ns = namespace(issues=[]) %}
-    {% set hvac_units = expand(hvac_entity) | list %}
-    {% if hvac_units | length == 0 %}
-      {% set ns.issues = ns.issues + ['HVAC: no entities configured'] %}
     {% else %}
-      {% for u in hvac_units %}
-        {% if u.state in ['unknown', 'unavailable'] %}
-          {% set ns.issues = ns.issues + ['HVAC ' ~ u.entity_id ~ ': ' ~ u.state] %}
-        {% endif %}
-      {% endfor %}
+      low
     {% endif %}
-    {% set room_ok = namespace(count=0) %}
-    {% for e in expand(room_temperature_sensors) %}
-      {% if e.state not in ['unavailable', 'unknown', 'none', ''] %}
-        {% set v = e.state | float(none) %}
-        {% if v is number %}
-          {% set room_ok.count = room_ok.count + 1 %}
-        {% endif %}
-      {% endif %}
-    {% endfor %}
-    {% if room_ok.count == 0 %}
-      {% set ns.issues = ns.issues + ['Room temperature: no valid sensor'] %}
-    {% endif %}
-    {% set outside_ok = namespace(count=0) %}
-    {% for e in expand(outside_temperature_sensors) %}
-      {% if e.state not in ['unavailable', 'unknown', 'none', ''] %}
-        {% set v = e.state | float(none) %}
-        {% if v is number %}
-          {% set outside_ok.count = outside_ok.count + 1 %}
-        {% endif %}
-      {% endif %}
-    {% endfor %}
-    {% if outside_ok.count == 0 %}
-      {% set ns.issues = ns.issues + ['Outside temperature: no valid sensor'] %}
-    {% endif %}
-    {{ ns.issues | join('; ') }}
 
 triggers:
   - trigger: state
@@ -560,16 +557,12 @@ triggers:
     to:
       - "on"
       - "off"
-    for: !input presence_duration
+    for: !input action_detection_threshold
     id: presence_change
 
-  - trigger: template
-    value_template: |
-      {% if windows_sensors.active_choice == 'YES' %}
-        {{ expand(windows_sensors.YES.sensors) | map(attribute='state') | join('|') }}
-      {% else %}
-        {{ false }}
-      {% endif %}
+  - trigger: state
+    entity_id: !input windows_sensors
+    for: !input action_detection_threshold
     id: window_change
 
   - trigger: template
@@ -599,6 +592,45 @@ triggers:
       {% endif %}
     id: night_enable_on
 
+conditions:
+  - condition: not
+    conditions:
+      - condition: state
+        entity_id: !input room_temperature_sensors
+        state:
+          - "unavailable"
+          - "unknown"
+  - condition: not
+    conditions:
+      - condition: state
+        entity_id: !input outside_temperature_sensors
+        state:
+          - "unavailable"
+          - "unknown"
+  - condition: not
+    conditions:
+      - condition: state
+        entity_id: !input occupation_sensor
+        state:
+          - "unavailable"
+          - "unknown"
+  - condition: not
+    conditions:
+      - condition: state
+        entity_id: !input windows_sensors
+        match: any
+        state:
+          - "unavailable"
+          - "unknown"
+  - condition: not
+    conditions:
+      - condition: state
+        entity_id: !input hvac_entity
+        match: any
+        state:
+          - "unavailable"
+          - "unknown"
+
 actions:
   - variables:
       target_mode: "off"
@@ -606,42 +638,23 @@ actions:
       target_temp: 24
 
 
-  # Routing choose (sanity → presence → window → default climate)
+  # Routing choose (confirmed-off → confirmed-open vent → confirmed-on+closed climate)
+  # No default: any unconfirmed presence/window state leaves target_mode at its initialized "off".
   - choose:
-      - conditions:
-          - condition: or
-            conditions:
-              - condition: template
-                value_template: "{{ inputs_unhealthy_log != '' }}"
-              - condition: not
-                conditions:
-                  - condition: state
-                    entity_id: !input occupation_sensor
-                    state:
-                      - "on"
-                      - "off"
-        sequence:
-          - action: system_log.write
-            data:
-              message: >-
-                Climate Control inputs unhealthy:
-                {% if inputs_unhealthy_log != '' %} {{ inputs_unhealthy_log }}{% endif %}
-                {% if states(occupation_sensor) not in ['on', 'off'] %}
-                Presence {{ occupation_sensor }}: {{ states(occupation_sensor) }}
-                {% endif %}
-              level: warning
-          - stop: "Inputs unhealthy — HVAC unchanged"
       - conditions:
           - condition: state
             entity_id: !input occupation_sensor
             state: "off"
-            for: !input presence_duration
+            for: !input action_detection_threshold
         sequence:
           - variables:
               target_mode: "off"
       - conditions:
-          - condition: template
-            value_template: "{{ any_window_open }}"
+          - condition: state
+            entity_id: !input windows_sensors
+            state: "on"
+            match: any
+            for: !input action_detection_threshold
         sequence:
           - if:
               - condition: template
@@ -650,124 +663,39 @@ actions:
               - variables:
                   target_mode: "fan_only"
                   target_fan: "low"
-                  target_temp: "{{ active_setpoint | float }}"
             else:
               - variables:
                   target_mode: "off"
-    default:
-      - if:
-          - condition: template
-            value_template: >
-              {% if is_day %}
-                {{ daytime_auto_climate_enabled }}
-              {% else %}
-                {{ nighttime_auto_climate_enabled }}
-              {% endif %}
-        then:
-          - variables:
-              target_temp: "{{ active_setpoint | float }}"
-              target_mode: >-
-                  {% set ext_delta = outside_temp | float - active_setpoint | float %}
-                  {% set int_delta = room_temp | float - active_setpoint | float %}
-                  {% if current_mode == 'auto' %}
-                    {% if ext_delta > 0 %}
-                      {% if int_delta > 2 %}
-                        cool
-                      {% elif int_delta < -2 %}
-                        fan_only
-                      {% else %}
-                        auto
-                      {% endif %}
-                    {% else %}
-                      {% if int_delta > 2 %}
-                        fan_only
-                      {% elif int_delta < -2 %}
-                        heat
-                      {% else %}
-                        auto
-                      {% endif %}
-                    {% endif %}
-                  {% elif current_mode == 'cool' %}
-                    {% if int_delta < 2 %}
-                      auto
-                    {% elif ext_delta < -2 %}
-                      fan_only
-                    {% else %}
-                      cool
-                    {% endif %}
-                  {% elif current_mode == 'heat' %}
-                    {% if int_delta > -2 %}
-                      auto
-                    {% elif ext_delta > 2 %}
-                      fan_only
-                    {% else %}
-                      heat
-                    {% endif %}
-                  {% elif current_mode == 'fan_only' %}
-                    {% if ext_delta > -2 and int_delta > 2 %}
-                      cool
-                    {% elif ext_delta < 2 and int_delta < -2 %}
-                      heat
-                    {% elif -2 < int_delta and int_delta < 2 %}
-                      auto
-                    {% else %}
-                      fan_only
-                    {% endif %}
-                  {% else %}
-                    auto
-                  {% endif %}
-              target_fan: >-
+      - conditions:
+          - condition: state
+            entity_id: !input occupation_sensor
+            state: "on"
+            for: !input action_detection_threshold
+          - condition: state
+            entity_id: !input windows_sensors
+            state: "off"
+            match: all
+            for: !input action_detection_threshold
+        sequence:
+          - if:
+              - condition: template
+                value_template: >
                   {% if is_day %}
-                    {% set int_delta = room_temp | float - active_setpoint | float %}
-                    {% if current_fan == 'low' %}
-                      {% if int_delta > 4.0 %}
-                        high
-                      {% elif int_delta > 2.0 %}
-                        medium
-                      {% elif int_delta < -4.0 %}
-                        high
-                      {% elif int_delta < -2.0 %}
-                        medium
-                      {% else %}
-                        low
-                      {% endif %}
-                    {% elif current_fan == 'medium' %}
-                      {% if int_delta > 4.0 %}
-                        high
-                      {% elif int_delta > 2.0 %}
-                        medium
-                      {% elif int_delta < -4.0 %}
-                        high
-                      {% elif int_delta < -2.0 %}
-                        medium
-                      {% else %}
-                        low
-                      {% endif %}
-                    {% elif current_fan == 'high' %}
-                      {% if int_delta > 4.0 %}
-                        high
-                      {% elif int_delta > 2.0 %}
-                        medium
-                      {% elif int_delta < -4.0 %}
-                        high
-                      {% elif int_delta < -2.0 %}
-                        medium
-                      {% else %}
-                        low
-                      {% endif %}                     
-                    {% else %}
-                      low
-                    {% endif %}
+                    {{ daytime_auto_climate_enabled }}
                   {% else %}
-                    low
+                    {{ nighttime_auto_climate_enabled }}
                   {% endif %}
+            then:
+              - variables:
+                  target_temp: "{{ active_setpoint | float }}"
+                  target_mode: "{{ next_mode }}"
+                  target_fan: "{{ next_fan }}"
 
   # Apply
   - if:
       - condition: template
         value_template: >
           {% set ns = namespace(result=false) %}
-          {% set hvac_list = hvac_entity %}
           {% for hvac_unit in hvac_entity %}
             {% if states(hvac_unit) != target_mode %}
               {% set ns.result = true %}
