@@ -1,20 +1,10 @@
 blueprint:
   name: Motion Activated Lights
   description: >
-    Turn on multiple lights when any motion sensor detects movement, and turn them
-    off after all sensors have been clear for a configurable timeout.
-
-    Create two input_boolean helpers — one to enable automation during the day and
-    one for the night. Day mode is active when the sun is above the horizon and the
-    day helper is on; night mode uses the night helper when the sun is below the horizon.
-
-    Uses restart mode: each new motion event cancels the in-progress timeout and
-    starts a fresh run from the beginning.
-
-    Assumptions:
-    - Motion sensors are binary_sensor entities with on/off states.
-    - Day and night are determined by sun position, not fixed clock hours.
-    - All selected lights turn on and off together as one zone.
+    Turn lights on/off from one motion, occupancy, or presence sensor.
+    Day/night enable control when motion turns lights on. Auto-off turns them
+    off when the room is empty. Day savings force-offs lights left on after 1 minute.
+    Threshold 0 = immediate. Combine sensors with a template binary_sensor if needed.
 
   domain: automation
   author: rftafas
@@ -24,60 +14,83 @@ blueprint:
   input:
     main_config:
       name: Main Configuration
-      description: Motion sensors, lights, and day/night enable helpers
+      description: Sensor and lights
       collapsed: false
       input:
-        motion_sensors:
-          name: Motion sensors
+        motion_sensor:
+          name: Motion sensor
           description: >
-            Any sensor going to on will trigger the automation. Supports PIR motion
-            and mmWave occupancy sensors.
+            One binary_sensor (motion, occupancy, or presence). Combine multiple
+            sensors with a template binary_sensor first.
           selector:
             entity:
-              multiple: true
               filter:
                 - domain: binary_sensor
                   device_class:
                     - motion
                     - occupancy
+                    - presence
 
         light_targets:
           name: Lights
-          description: All selected lights are turned on and off together.
+          description: Lights turned on and off together.
           selector:
             entity:
               multiple: true
               filter:
                 domain: light
 
+    detector_config:
+      name: Behavior
+      description: Day/night auto-on, auto-off, and day savings
+      collapsed: false
+      input:
         day_enable:
-          name: Enable during day
-          description: >
-            input_boolean helper. Active when the sun is above the horizon and this
-            helper is on.
+          name: Day enable
+          description: Auto on by motion while the sun is up.
+          default: true
           selector:
-            entity:
-              filter:
-                domain: input_boolean
+            boolean: {}
 
         night_enable:
-          name: Enable during night
-          description: >
-            input_boolean helper. Active when the sun is below the horizon and this
-            helper is on.
+          name: Night enable
+          description: Auto on by motion while the sun is down.
+          default: true
           selector:
-            entity:
-              filter:
-                domain: input_boolean
+            boolean: {}
+
+        enable_turn_off:
+          name: Auto-off enable
+          description: Turn lights off after the sensor is clear for the off threshold.
+          default: true
+          selector:
+            boolean: {}
+
+        save_energy_during_day:
+          name: Day savings enable
+          description: Turn lights off after 1 minute while the sun is up.
+          default: false
+          selector:
+            boolean: {}
 
     threshold_config:
       name: Timing
-      description: No-motion timeout before turning lights off
+      description: 0 = immediate
       collapsed: true
       input:
-        no_motion_timeout:
-          name: No-motion timeout
-          description: Turn lights off after all sensors have been off for this long.
+        turn_on_threshold:
+          name: Turn-on threshold
+          description: How long the sensor must stay on before lights turn on.
+          default:
+            hours: 0
+            minutes: 0
+            seconds: 0
+          selector:
+            duration: {}
+
+        turn_off_threshold:
+          name: Turn-off threshold
+          description: How long the sensor must stay off before lights turn off.
           default:
             hours: 0
             minutes: 2
@@ -89,44 +102,74 @@ mode: restart
 max_exceeded: silent
 
 variables:
-  motion_sensors: !input motion_sensors
+  day_enable: !input day_enable
+  night_enable: !input night_enable
 
 trigger:
   - trigger: state
-    entity_id: !input motion_sensors
+    entity_id: !input motion_sensor
     to: "on"
+    for: !input turn_on_threshold
+    id: detect_on
 
-condition:
-  - condition: or
-    conditions:
-      - condition: and
-        conditions:
+  - trigger: state
+    entity_id: !input motion_sensor
+    to: "off"
+    for: !input turn_off_threshold
+    enabled: !input enable_turn_off
+    id: detect_off
+
+  - trigger: state
+    entity_id: !input light_targets
+    to: "on"
+    for:
+      minutes: 1
+    enabled: !input save_energy_during_day
+    id: day_force_off
+
+condition: []
+
+action:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: day_force_off
           - condition: state
             entity_id: sun.sun
             state: above_horizon
-          - condition: state
-            entity_id: !input day_enable
-            state: "on"
-      - condition: and
-        conditions:
-          - condition: state
-            entity_id: sun.sun
-            state: below_horizon
-          - condition: state
-            entity_id: !input night_enable
-            state: "on"
+        sequence:
+          - action: light.turn_off
+            target:
+              entity_id: !input light_targets
 
-action:
-  - action: light.turn_on
-    target:
-      entity_id: !input light_targets
+      - conditions:
+          - condition: trigger
+            id: detect_on
+          - condition: or
+            conditions:
+              - condition: and
+                conditions:
+                  - condition: state
+                    entity_id: sun.sun
+                    state: above_horizon
+                  - condition: template
+                    value_template: "{{ day_enable }}"
+              - condition: and
+                conditions:
+                  - condition: state
+                    entity_id: sun.sun
+                    state: below_horizon
+                  - condition: template
+                    value_template: "{{ night_enable }}"
+        sequence:
+          - action: light.turn_on
+            target:
+              entity_id: !input light_targets
 
-  - wait_for_trigger:
-      - trigger: template
-        value_template: >
-          {{ expand(motion_sensors) | selectattr('state', 'eq', 'on') | list | count == 0 }}
-        for: !input no_motion_timeout
-
-  - action: light.turn_off
-    target:
-      entity_id: !input light_targets
+      - conditions:
+          - condition: trigger
+            id: detect_off
+        sequence:
+          - action: light.turn_off
+            target:
+              entity_id: !input light_targets
