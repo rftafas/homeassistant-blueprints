@@ -1,7 +1,7 @@
 blueprint:
   name: Simple Climate Control
   description: >
-    Reactive day/night climate for one or more HVAC entities: daytime comfort bands (4 °C), nighttime mode from a forecast temperature, presence and window gating with a shared confirmation threshold, and a single idempotent apply per run.
+    Reactive day/night climate for one or more HVAC entities: daytime comfort bands (4 °C), nighttime mode from a forecast temperature, presence with separate onboard/exit confirmation, window gating, and a single idempotent apply per run.
 
     - **Day:** setpoint-driven cool/heat/auto and fan bands
 
@@ -101,8 +101,7 @@ blueprint:
           name: Room occupation sensor
           description: >
             Gates day/night climate and can turn HVAC off after the room stays unoccupied.
-            Valid presence transitions only (`off`↔`on`), after the
-            **Action detection threshold** (see Detection timing).
+            Onboard and exit use separate confirmation times (see Detection timing).
             Use an `input_boolean` left **on** if you do not want unoccupied shutoff.
           selector:
             entity:
@@ -137,15 +136,31 @@ blueprint:
 
     threshold_config:
       name: Detection timing
-      description: Global confirmation window applied to presence and window sensors.
+      description: Confirmation windows for presence onboard/exit and windows.
       input:
-        action_detection_threshold:
-          name: Action detection threshold
-          description: >
-            How long a sensor must continuously hold a state before it's
-            treated as confirmed — sustained presence/absence, and sustained
-            window open/closed. Filters brief glitches and pass-throughs.
-            Until a state is confirmed, the automation leaves HVAC unchanged.
+        presence_on_threshold:
+          name: Presence onboard threshold
+          description: How long the room must stay occupied before climate starts.
+          default:
+            hours: 0
+            minutes: 2
+            seconds: 0
+          selector:
+            duration: {}
+
+        presence_off_threshold:
+          name: Presence exit threshold
+          description: How long the room must stay empty before HVAC turns off.
+          default:
+            hours: 0
+            minutes: 10
+            seconds: 0
+          selector:
+            duration: {}
+
+        window_detection_threshold:
+          name: Window detection threshold
+          description: How long a window must stay open or closed before it counts.
           default:
             hours: 0
             minutes: 10
@@ -551,18 +566,19 @@ triggers:
 
   - trigger: state
     entity_id: !input occupation_sensor
-    from:
-      - "off"
-      - "on"
-    to:
-      - "on"
-      - "off"
-    for: !input action_detection_threshold
-    id: presence_change
+    to: "on"
+    for: !input presence_on_threshold
+    id: presence_on
+
+  - trigger: state
+    entity_id: !input occupation_sensor
+    to: "off"
+    for: !input presence_off_threshold
+    id: presence_off
 
   - trigger: state
     entity_id: !input windows_sensors
-    for: !input action_detection_threshold
+    for: !input window_detection_threshold
     id: window_change
 
   - trigger: template
@@ -645,7 +661,7 @@ actions:
           - condition: state
             entity_id: !input occupation_sensor
             state: "off"
-            for: !input action_detection_threshold
+            for: !input presence_off_threshold
         sequence:
           - variables:
               target_mode: "off"
@@ -654,7 +670,7 @@ actions:
             entity_id: !input windows_sensors
             state: "on"
             match: any
-            for: !input action_detection_threshold
+            for: !input window_detection_threshold
         sequence:
           - if:
               - condition: template
@@ -670,12 +686,12 @@ actions:
           - condition: state
             entity_id: !input occupation_sensor
             state: "on"
-            for: !input action_detection_threshold
+            for: !input presence_on_threshold
           - condition: state
             entity_id: !input windows_sensors
             state: "off"
             match: all
-            for: !input action_detection_threshold
+            for: !input window_detection_threshold
         sequence:
           - if:
               - condition: template
