@@ -140,7 +140,10 @@ blueprint:
       input:
         presence_on_threshold:
           name: Presence onboard threshold
-          description: How long the room must stay occupied before climate starts.
+          description: >
+            How long the room must stay occupied before a presence-on trigger
+            re-evaluates climate. Climate on temperature/other triggers uses
+            exit timing instead (not empty for the exit threshold).
           default:
             hours: 0
             minutes: 2
@@ -150,7 +153,9 @@ blueprint:
 
         presence_off_threshold:
           name: Presence exit threshold
-          description: How long the room must stay empty before HVAC turns off.
+          description: >
+            How long the room must stay empty before HVAC turns off. Climate
+            continues unless this empty confirmation is met (handles presence ripples).
           default:
             hours: 0
             minutes: 10
@@ -654,8 +659,10 @@ actions:
       target_temp: 24
 
 
-  # Routing choose (confirmed-off → confirmed-open vent → confirmed-on+closed climate)
-  # No default: any unconfirmed presence/window state leaves target_mode at its initialized "off".
+  # Routing choose (confirmed-empty → confirmed-open vent → not-empty + closed climate).
+  # Climate uses negative presence: not (off for exit threshold) so temperature
+  # re-evals during on/off ripples do not drop the occupied path.
+  # No default: unconfirmed window state leaves target_mode at initialized "off".
   - choose:
       - conditions:
           - condition: state
@@ -683,10 +690,12 @@ actions:
               - variables:
                   target_mode: "off"
       - conditions:
-          - condition: state
-            entity_id: !input occupation_sensor
-            state: "on"
-            for: !input presence_on_threshold
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: !input occupation_sensor
+                state: "off"
+                for: !input presence_off_threshold
           - condition: state
             entity_id: !input windows_sensors
             state: "off"
