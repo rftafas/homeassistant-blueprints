@@ -141,9 +141,8 @@ blueprint:
         presence_on_threshold:
           name: Presence onboard threshold
           description: >
-            How long the room must stay occupied before a presence-on trigger
-            re-evaluates climate. Climate on temperature/other triggers uses
-            exit timing instead (not empty for the exit threshold).
+            How long the room must stay occupied before climate may turn HVAC
+            on from off. Walk-throughs shorter than this do not start climate.
           default:
             hours: 0
             minutes: 2
@@ -154,8 +153,9 @@ blueprint:
         presence_off_threshold:
           name: Presence exit threshold
           description: >
-            How long the room must stay empty before HVAC turns off. Climate
-            continues unless this empty confirmation is met (handles presence ripples).
+            How long the room must stay empty before HVAC turns off (when
+            windows are not open). While HVAC is already on, temperature
+            re-evals keep adjusting until this empty confirmation is met.
           default:
             hours: 0
             minutes: 10
@@ -659,19 +659,13 @@ actions:
       target_temp: 24
 
 
-  # Routing choose (confirmed-empty → confirmed-open vent → not-empty + closed climate).
-  # Climate uses negative presence: not (off for exit threshold) so temperature
-  # re-evals during on/off ripples do not drop the occupied path.
-  # No default: unconfirmed window state leaves target_mode at initialized "off".
+  # Routing choose, in order:
+  # 1) window open → ventilation band or off
+  # 2) room empty → off
+  # 3) keep on → temperature trigger + not empty (exit threshold) + HVAC not off
+  # 4) turn on → occupied for onboard threshold
+  # No default: unconfirmed states leave target_mode at initialized "off".
   - choose:
-      - conditions:
-          - condition: state
-            entity_id: !input occupation_sensor
-            state: "off"
-            for: !input presence_off_threshold
-        sequence:
-          - variables:
-              target_mode: "off"
       - conditions:
           - condition: state
             entity_id: !input windows_sensors
@@ -690,17 +684,45 @@ actions:
               - variables:
                   target_mode: "off"
       - conditions:
+          - condition: state
+            entity_id: !input occupation_sensor
+            state: "off"
+            for: !input presence_off_threshold
+        sequence:
+          - variables:
+              target_mode: "off"
+      - conditions:
+          - condition: trigger
+            id:
+              - room_temp_change
+              - outside_temp_change
           - condition: not
             conditions:
               - condition: state
                 entity_id: !input occupation_sensor
                 state: "off"
                 for: !input presence_off_threshold
+          - condition: template
+            value_template: "{{ current_mode != 'off' }}"
+        sequence:
+          - if:
+              - condition: template
+                value_template: >
+                  {% if is_day %}
+                    {{ daytime_auto_climate_enabled }}
+                  {% else %}
+                    {{ nighttime_auto_climate_enabled }}
+                  {% endif %}
+            then:
+              - variables:
+                  target_temp: "{{ active_setpoint | float }}"
+                  target_mode: "{{ next_mode }}"
+                  target_fan: "{{ next_fan }}"
+      - conditions:
           - condition: state
-            entity_id: !input windows_sensors
-            state: "off"
-            match: all
-            for: !input window_detection_threshold
+            entity_id: !input occupation_sensor
+            state: "on"
+            for: !input presence_on_threshold
         sequence:
           - if:
               - condition: template
